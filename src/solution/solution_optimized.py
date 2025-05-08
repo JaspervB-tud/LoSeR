@@ -147,8 +147,7 @@ class Solution:
                 self.closest_points_inter[(cluster, other_cluster)] = (idx_to_add, idx)
         # Update objective value
         self.objective = candidate_objective
-        
-    
+         
     def evaluate_swap(self, idx_to_add, idx_to_remove):
         """
         Evaluates whether the proposed swap improves the current solution.
@@ -223,6 +222,51 @@ class Solution:
                         add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
+
+    def accept_swap(self, idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the swap of a pair of points to the solution.
+        Note that this assumes that the initial solution
+        was feasible.
+        -----------------------------------------------------
+        PARAMETERS:
+        idx_to_add: int
+            The index of the point to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
+            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+        """
+        cluster = self.clusters[idx_to_add]
+        # Update selected points
+        self.selection[idx_to_add] = True
+        self.selection[idx_to_remove] = False
+        self.selection_per_cluster[cluster].add(idx_to_add)
+        self.selection_per_cluster[cluster].remove(idx_to_remove)
+        self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add)
+        # Update intra cluster distances (add_within_cluster)
+        for idx, new_closest_point, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = new_closest_point
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, cur_closest_pair, dist in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+        # Update objective value
+        self.objective = candidate_objective
+
 
     def evaluate_doubleswap(self, idxs_to_add, idx_to_remove):
         """
