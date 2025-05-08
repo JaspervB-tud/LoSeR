@@ -80,6 +80,8 @@ class Solution:
         """
         Evaluates whether the proposed addition improves the current solution.
         """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot evaluate addition.")
         if self.selection[idx_to_add]:
             raise ValueError("The point to add must not be selected.")
         cluster = self.clusters[idx_to_add]
@@ -104,9 +106,48 @@ class Solution:
                         cur_idx = idx
                 if cur_idx > -1:
                     candidate_objective += cur_max - self.closest_distances_inter[cluster, other_cluster]
-                    add_for_other_clusters.append((cluster, other_cluster, cur_max, cur_idx))
+                    add_for_other_clusters.append((other_cluster, cur_max, cur_idx))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
+    
+    def accept_add(self, idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the addition of a point to the solution.
+        Note that this assumes that the initial solution
+        was feasible.
+        ------------------------------------------------
+        PARAMETERS:
+        idx_to_add: int
+            The index of the point to be added.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_distance, index_in_other_cluster)]
+        """
+        cluster = self.clusters[idx_to_add]
+        # Update selected points
+        self.selection[idx_to_add] = True
+        self.selection_per_cluster[cluster].add(idx_to_add)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add) #explicitly remove instead of discard since it should throw an error if not selected
+        # Update intra cluster distances (add_within_cluster)
+        for idx, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = idx_to_add
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, dist, idx in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = (idx, idx_to_add)
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = (idx_to_add, idx)
+        # Update objective value
+        self.objective = candidate_objective
+        
     
     def evaluate_swap(self, idx_to_add, idx_to_remove):
         """
@@ -167,7 +208,7 @@ class Solution:
                                 else:
                                     cur_closest_pair = (other_idx, idx)
                     candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
-                    add_for_other_clusters.append((cluster, other_cluster, cur_closest_pair, cur_closest_similarity))
+                    add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
                 else: #point to be removed is not closest, check if newly added point is closer
                     for idx in self.selection_per_cluster[other_cluster]:
                         cur_similarity = 1 - self.distances[idx, idx_to_add]
@@ -179,7 +220,7 @@ class Solution:
                                 cur_closest_pair = (idx_to_add, idx)
                     if cur_closest_pair[0] > -1:
                         candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
-                        add_for_other_clusters.append((cluster, other_cluster, cur_closest_pair, cur_closest_similarity))
+                        add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
