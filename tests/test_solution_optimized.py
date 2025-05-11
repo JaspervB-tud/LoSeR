@@ -1176,6 +1176,266 @@ def test_accept_doubleswap_3():
     np.testing.assert_array_almost_equal(solution_object.closest_distances_inter, expected_closest_distances_inter, decimal=5)   
     assert expected_closest_points_inter == solution_object.closest_points_inter
 
+def test_accept_doubleswap_4():
+    # Larger instance, 10 points, 3 clusters, test when swapping out NON-uniquely selected point
+    distances = np.array([
+        [0.0, 0.2, 0.4,     0.6, 0.8, 1.0,      0.9, 0.7, 0.5, 0.3], #0
+        [0.2, 0.0, 0.3,     0.5, 0.7, 0.9,      0.8, 0.6, 0.4, 0.2], #0
+        [0.4, 0.3, 0.0,     0.2, 0.4, 0.6,      0.5, 0.3, 0.1, 0.2], #0
+
+        [0.6, 0.5, 0.2,     0.0, 0.3, 0.5,      0.4, 0.2, 0.1, 0.3], #1
+        [0.8, 0.7, 0.4,     0.3, 0.0, 0.2,      0.1, 0.3, 0.5, 0.7], #1
+        [1.0, 0.9, 0.6,     0.5, 0.2, 0.0,      0.3, 0.5, 0.7, 0.9], #1
+
+        [0.9, 0.8, 0.5,     0.4, 0.1, 0.3,      0.0, 0.2, 0.4, 0.6], #2
+        [0.7, 0.6, 0.3,     0.2, 0.3, 0.5,      0.2, 0.0, 0.2, 0.4], #2
+        [0.5, 0.4, 0.1,     0.1, 0.5, 0.7,      0.4, 0.2, 0.0, 0.2], #2
+        [0.3, 0.2, 0.2,     0.3, 0.7, 0.9,      0.6, 0.4, 0.2, 0.0]  #2
+    ], dtype=np.float32)
+    clusters = np.array(
+        [0, 0, 0, 1, 1, 1, 2, 2, 2, 2], dtype=np.int32
+    )
+
+    selection = np.array([True, True, False, True, True, False, True, False, False, False], dtype=bool)
+    #                       0     1     2      3     4     5     6     7       8      9
+    selection_cost = 0.5
+
+    # Swapping point 7 (index 6) with points 8 (index 7) and 9 (index 8)
+    expected_selection = np.array([True, True, False, True, True, False, False, True, True, False], dtype=bool)
+    expected_objective_value = groundtruth_objective_value(expected_selection, clusters, distances, selection_cost)
+    expected_points_per_cluster = {
+        0: {0, 1, 2},
+        1: {3, 4, 5},
+        2: {6, 7, 8, 9}
+    }
+    expected_selection_per_cluster = {
+        0: {0, 1},
+        1: {3, 4},
+        2: {7, 8}
+    }
+    expected_nonselection_per_cluster = {
+        0: {2},
+        1: {5},
+        2: {6, 9}
+    }
+    expected_closest_distances_intra = np.array(
+        [0.0, 0.0, 0.3, 0.0, 0.0, 0.2, 0.2, 0.0, 0.0, 0.2], dtype=np.float32
+    )
+    expected_closest_points_intra = np.array(
+        [0, 1, 1, 3, 4, 4, 7, 7, 8, 8], dtype=np.int32
+    )
+    expected_closest_distances_inter = np.array([
+        [0.0, 0.5, 0.6],
+        [0.5, 0.0, 0.9],
+        [0.6, 0.9, 0.0]
+    ], dtype=np.float32)
+    expected_closest_points_inter = {
+        (0, 1): (1, 3),
+        (0, 2): (1, 8),
+        (1, 2): (3, 8)
+    }
+
+    solution_object = solution.Solution(distances, clusters, selection=selection, selection_cost=selection_cost)
+    new_objective_value, intra_changes, inter_changes = solution_object.evaluate_doubleswap((7,8), 6)
+    solution_object.accept_doubleswap((7,8), 6, new_objective_value, intra_changes, inter_changes)
+
+    np.testing.assert_array_equal(solution_object.selection, expected_selection)
+    np.testing.assert_almost_equal(solution_object.objective, expected_objective_value, decimal=5)
+    assert expected_points_per_cluster == solution_object.points_per_cluster
+    assert expected_selection_per_cluster == solution_object.selection_per_cluster
+    assert expected_nonselection_per_cluster == solution_object.nonselection_per_cluster
+    np.testing.assert_array_equal(solution_object.closest_distances_intra, expected_closest_distances_intra)
+    np.testing.assert_array_equal(solution_object.closest_points_intra, expected_closest_points_intra)
+    np.testing.assert_array_equal(solution_object.closest_distances_inter, expected_closest_distances_inter)   
+    assert expected_closest_points_inter == solution_object.closest_points_inter
+
+def test_evaluate_remove_1():
+    # Small instance, 6 points, 2 clusters
+    # In this test, the point removed as well as other points have associated changes
+    distances = np.array([
+        [0.0, 0.9, 0.8, 0.7, 0.6, 0.5],
+        [0.9, 0.0, 0.4, 0.3, 0.2, 0.1],
+        [0.8, 0.4, 0.0, 0.5, 0.6, 0.7],
+        [0.7, 0.3, 0.5, 0.0, 0.1, 0.2],
+        [0.6, 0.2, 0.6, 0.1, 0.0, 0.3],
+        [0.5, 0.1, 0.7, 0.2, 0.3, 0.0]
+    ], dtype=np.float32)
+    clusters = np.array(
+        [0, 0, 0, 1, 1, 1], dtype=np.int32
+    )
+
+    selection = np.array([True, True, False, True, False, False], dtype=bool)
+    selection_cost = 0.1
+
+    # Removing point at index 1 (removing point 2 from the solution)
+    # Expected output for removing index 1:
+    expected_selection = np.array([True, False, False, True, False, False], dtype=bool)
+    expected_objective_value = groundtruth_objective_value(expected_selection, clusters, distances, selection_cost)
+    expected_intra_changes = [
+        (np.int64(1), np.int64(0), np.float32(0.9)),
+        (np.int64(2), np.int64(0), np.float32(0.8))
+    ]
+    expected_inter_changes = [
+        (np.int32(1), (np.int64(0), np.int64(3)), np.float32(0.3))
+    ]
+
+    solution_object = solution.Solution(distances, clusters, selection=selection, selection_cost=selection_cost)
+    new_objective_value, intra_changes, inter_changes = solution_object.evaluate_remove(1)
+
+    assert sorted(inter_changes) == sorted(expected_inter_changes)
+    assert sorted(intra_changes) == sorted(expected_intra_changes)
+    np.testing.assert_almost_equal(new_objective_value, expected_objective_value, decimal=5)
+
+def test_evaluate_remove_2():
+    # Small instance, 6 points, 2 clusters
+    # In this test, only the point removed will have associated changes
+    distances = np.array([
+        [0.0, 0.9, 0.8, 0.7, 0.6, 0.5],
+        [0.9, 0.0, 0.4, 0.3, 0.2, 0.1],
+        [0.8, 0.4, 0.0, 0.5, 0.6, 0.7],
+        [0.7, 0.3, 0.5, 0.0, 0.1, 0.2],
+        [0.6, 0.2, 0.6, 0.1, 0.0, 0.3],
+        [0.5, 0.1, 0.7, 0.2, 0.3, 0.0]
+    ], dtype=np.float32)
+    clusters = np.array(
+        [0, 0, 0, 1, 1, 1], dtype=np.int32
+    )
+
+    selection = np.array([True, True, False, True, False, False], dtype=bool)
+    selection_cost = 0.1
+
+    # Removing point at index 0 (removing point 1 from the solution)
+    # Expected output for removing index 0:
+    expected_selection = np.array([False, True, False, True, False, False], dtype=bool)
+    expected_objective_value = groundtruth_objective_value(expected_selection, clusters, distances, selection_cost)
+    expected_intra_changes = [
+        (np.int64(0), np.int64(1), np.float32(0.9))
+    ]
+    expected_inter_changes = [
+    ]
+
+    solution_object = solution.Solution(distances, clusters, selection=selection, selection_cost=selection_cost)
+    new_objective_value, intra_changes, inter_changes = solution_object.evaluate_remove(0)
+
+    assert sorted(inter_changes) == sorted(expected_inter_changes)
+    assert sorted(intra_changes) == sorted(expected_intra_changes)
+    np.testing.assert_almost_equal(new_objective_value, expected_objective_value, decimal=5)
+
+def test_evaluate_remove_3():
+    # Small instance, 6 points, 2 clusters
+    # In this test, only the point removed will have associated changes and the closest point for the other cluster
+    distances = np.array([
+        [0.0, 0.9, 0.8, 0.1, 0.6, 0.5],
+        [0.9, 0.0, 0.4, 0.3, 0.2, 0.1],
+        [0.8, 0.4, 0.0, 0.5, 0.6, 0.7],
+        [0.1, 0.3, 0.5, 0.0, 0.1, 0.2],
+        [0.6, 0.2, 0.6, 0.1, 0.0, 0.3],
+        [0.5, 0.1, 0.7, 0.2, 0.3, 0.0]
+    ], dtype=np.float32)
+    clusters = np.array(
+        [0, 0, 0, 1, 1, 1], dtype=np.int32
+    )
+
+    selection = np.array([True, True, False, True, False, False], dtype=bool)
+    selection_cost = 0.1
+
+    # Removing point at index 0 (removing point 1 from the solution)
+    # Expected output for removing index 0:
+    expected_selection = np.array([False, True, False, True, False, False], dtype=bool)
+    expected_objective_value = groundtruth_objective_value(expected_selection, clusters, distances, selection_cost)
+    expected_intra_changes = [
+        (np.int64(0), np.int64(1), np.float32(0.9))
+    ]
+    expected_inter_changes = [
+        (np.int32(1), (np.int64(1), np.int64(3)), np.float32(0.7))
+    ]
+
+    solution_object = solution.Solution(distances, clusters, selection=selection, selection_cost=selection_cost)
+    new_objective_value, intra_changes, inter_changes = solution_object.evaluate_remove(0)
+
+    assert sorted(inter_changes) == sorted(expected_inter_changes)
+    assert sorted(intra_changes) == sorted(expected_intra_changes)
+    np.testing.assert_almost_equal(new_objective_value, expected_objective_value, decimal=5)
+
+def test_evaluate_remove_4():
+    distances = np.array([
+        [0.0, 0.2, 0.4,     0.6,    0.8, 1.0,   0.9, 0.7, 0.5, 0.3], #0
+        [0.2, 0.0, 0.3,     0.5,    0.7, 0.9,   0.8, 0.6, 0.4, 0.2], #0
+        [0.4, 0.3, 0.0,     0.2,    0.4, 0.6,   0.5, 0.3, 0.1, 0.2], #0
+
+        [0.6, 0.5, 0.2,     0.0,    0.3, 0.5,   0.4, 0.2, 0.1, 0.3], #1
+
+        [0.8, 0.7, 0.4,     0.3,    0.0, 0.2,   0.1, 0.3, 0.5, 0.7], #2
+        [1.0, 0.9, 0.6,     0.5,    0.2, 0.0,   0.3, 0.5, 0.7, 0.9], #2
+
+        [0.9, 0.8, 0.5,     0.4,    0.1, 0.3,   0.0, 0.2, 0.4, 0.6], #3
+        [0.7, 0.6, 0.3,     0.2,    0.3, 0.5,   0.2, 0.0, 0.2, 0.4], #3
+        [0.5, 0.4, 0.1,     0.1,    0.5, 0.7,   0.4, 0.2, 0.0, 0.2], #3
+        [0.3, 0.2, 0.2,     0.3,    0.7, 0.9,   0.6, 0.4, 0.2, 0.0]  #3
+    ], dtype=np.float32)
+    clusters = np.array(
+        [0, 0, 0, 1, 2, 2, 3, 3, 3, 3], dtype=np.int32
+    )
+
+    selection = np.array([True, True, False,     True,      True, False,    True, False, True, False], dtype=bool)
+    selection_cost = 0.5
+
+    # Removing point 1 (index 0) to the solution
+    expected_selection = np.array([False, True, False,  True,   True, False,    True, False, True, False], dtype=bool)
+    expected_objective_value = groundtruth_objective_value(expected_selection, clusters, distances, selection_cost)
+    expected_intra_changes = [
+        (0, 1, np.float32(0.2))
+    ]
+    expected_inter_changes = [
+    ]
+
+    solution_object = solution.Solution(distances, clusters, selection=selection, selection_cost=selection_cost)
+    new_objective_value, intra_changes, inter_changes = solution_object.evaluate_remove(0)
+
+    assert sorted(inter_changes) == sorted(expected_inter_changes)
+    assert sorted(intra_changes) == sorted(expected_intra_changes)
+    np.testing.assert_almost_equal(new_objective_value, expected_objective_value, decimal=5)
+
+def test_evaluate_remove_5():
+    distances = np.array([
+        [0.0, 0.2, 0.4,     0.5,    0.8, 1.0,   0.9, 0.7, 0.5, 0.3], #0
+        [0.2, 0.0, 0.3,     0.6,    0.7, 0.9,   0.8, 0.6, 0.4, 0.2], #0
+        [0.4, 0.3, 0.0,     0.2,    0.4, 0.6,   0.5, 0.3, 0.1, 0.2], #0
+
+        [0.5, 0.6, 0.2,     0.0,    0.3, 0.5,   0.4, 0.2, 0.1, 0.3], #1
+
+        [0.8, 0.7, 0.4,     0.3,    0.0, 0.2,   0.1, 0.3, 0.5, 0.7], #2
+        [1.0, 0.9, 0.6,     0.5,    0.2, 0.0,   0.3, 0.5, 0.7, 0.9], #2
+
+        [0.9, 0.8, 0.5,     0.4,    0.1, 0.3,   0.0, 0.2, 0.4, 0.6], #3
+        [0.7, 0.6, 0.3,     0.2,    0.3, 0.5,   0.2, 0.0, 0.2, 0.4], #3
+        [0.5, 0.4, 0.1,     0.1,    0.5, 0.7,   0.4, 0.2, 0.0, 0.2], #3
+        [0.3, 0.2, 0.2,     0.3,    0.7, 0.9,   0.6, 0.4, 0.2, 0.0]  #3
+    ], dtype=np.float32)
+    clusters = np.array(
+        [0, 0, 0, 1, 2, 2, 3, 3, 3, 3], dtype=np.int32
+    )
+
+    selection = np.array([True, True, False,     True,      True, False,    True, False, True, False], dtype=bool)
+    selection_cost = 0.5
+
+    # Removing point 1 (index 0) to the solution
+    expected_selection = np.array([False, True, False,  True,   True, False,    True, False, True, False], dtype=bool)
+    expected_objective_value = groundtruth_objective_value(expected_selection, clusters, distances, selection_cost)
+    expected_intra_changes = [
+        (0, 1, np.float32(0.2))
+    ]
+    expected_inter_changes = [
+        (1, (1, 3), np.float32(0.4))
+    ]
+
+    solution_object = solution.Solution(distances, clusters, selection=selection, selection_cost=selection_cost)
+    new_objective_value, intra_changes, inter_changes = solution_object.evaluate_remove(0)
+
+    compare_tuples(sorted(inter_changes), sorted(expected_inter_changes))
+    compare_tuples(sorted(intra_changes), sorted(expected_intra_changes))
+    np.testing.assert_almost_equal(new_objective_value, expected_objective_value, decimal=5)
+
 # Functions for calculating the groundtruth
 def groundtruth_objective_value(selection, clusters, distances, selection_cost):
     # Cost for selecting items
@@ -1196,3 +1456,12 @@ def groundtruth_objective_value(selection, clusters, distances, selection_cost):
             cur_max = max(cur_max, 1 - distances[point_pair[0], point_pair[1]])
         objective_value += cur_max
     return objective_value
+
+def compare_tuples(t1, t2):
+    t1 = t1[0]
+    t2 = t2[0]
+    assert len(t1) == len(t2)
+    for i in range(len(t1)):
+        x = np.array(t1[i])
+        y = np.array(t2[i])
+        np.testing.assert_array_almost_equal(x, y, decimal=5)
