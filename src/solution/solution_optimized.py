@@ -641,7 +641,7 @@ class Solution:
             uncovered_clusters.discard(self.clusters[point])
         return len(uncovered_clusters) == 0
 
-    def local_search(self, max_iterations=1000):
+    def local_search(self, max_iterations=1000, best_swap=False):
         """
         Perform a local search to find a (local) optimal solution.
         
@@ -649,6 +649,8 @@ class Solution:
         -----------
         max_iterations: int
             The maximum number of iterations to perform.
+        best_swap: bool
+            If True, only the best swap will be performed in each iteration, instead of the first swap that improves the solution.
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot perform local search.")
@@ -671,14 +673,26 @@ class Solution:
                     break
             # Try swapping a selected point and unselected point
             if not solution_changed:
-                for idx_to_add, idx_to_remove in self.generate_indices_swap():
-                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
-                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
-                        self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                if best_swap:
+                    best_swap_candidate = (self.objective, None, None, None, None, False)
+                    for idx_to_add, idx_to_remove in self.generate_indices_swap():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        if candidate_objective < best_swap_candidate[0] and np.abs(candidate_objective - best_swap_candidate[0]) > 1e-8:
+                            best_swap_candidate = (candidate_objective, idx_to_add, idx_to_remove, add_within_cluster, add_for_other_clusters, True)
+                    if best_swap_candidate[5]:
+                        self.accept_swap(best_swap_candidate[1], best_swap_candidate[2], best_swap_candidate[0], best_swap_candidate[3], best_swap_candidate[4])
                         solution_changed = True
-                        objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
+                        objectives.append((self.objective, f"swapped {best_swap_candidate[2]} for {best_swap_candidate[1]} in cluster {self.clusters[best_swap_candidate[1]]}"))
                         selections.append(self.selection.copy())
-                        break
+                else:
+                    for idx_to_add, idx_to_remove in self.generate_indices_swap():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                            self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            solution_changed = True
+                            objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
+                            selections.append(self.selection.copy())
+                            break
             # Try swapping two selected points with one unselected point
             if not solution_changed:
                 for (idx_to_add1, idx_to_add2), idx_to_remove in self.generate_indices_doubleswap():
@@ -708,7 +722,248 @@ class Solution:
 
         return objectives, selections
 
+    def local_search_random(self, max_iterations=1000):
+        """
+        Perform a local search to find a (local) optimal solution.
+        NOTE: This version picks a random move to make rather than structurally exhausting all options.
         
+        Parameters:
+        -----------
+        max_iterations: int
+            The maximum number of iterations to perform.
+        """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot perform local search.")
+        
+        iteration = 0
+        objectives = [(self.objective, "start")]
+        selections = [self.selection.copy()]
+
+        solution_changed = False
+        while iteration < max_iterations:
+            solution_changed = False
+            for move_type, move_content in self.generate_random_moves():
+                if move_type == "add":
+                    idx_to_add = move_content
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"added {idx_to_add} from cluster {self.clusters[idx_to_add]}"))
+                        selections.append(self.selection.copy())
+                        break
+                elif move_type == "swap":
+                    idx_to_add, idx_to_remove = move_content
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
+                        selections.append(self.selection.copy())
+                        break
+                elif move_type == "doubleswap":
+                    (idx_to_add1, idx_to_add2), idx_to_remove = move_content
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"doubleswapped {idx_to_remove} for {idx_to_add1} and {idx_to_add2} in cluster {self.clusters[idx_to_add1]}"))
+                        selections.append(self.selection.copy())
+                        break
+                elif move_type == "remove":
+                    idx_to_remove = move_content
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"removed {idx_to_remove} from cluster {self.clusters[idx_to_remove]}"))
+                        selections.append(self.selection.copy())
+                        break
+            if not solution_changed:
+                break
+            else:
+                iteration += 1
+                if iteration % 50 == 0:
+                    print(f"Iteration {iteration}: Objective = {self.objective}")
+
+        return objectives, selections
+
+    def local_search_removefirst(self, max_iterations=1000, best_swap=False):
+        """
+        Perform a local search to find a (local) optimal solution.
+        
+        Parameters:
+        -----------
+        max_iterations: int
+            The maximum number of iterations to perform.
+        best_swap: bool
+            If True, only the best swap will be performed in each iteration, instead of the first swap that improves the solution.
+        """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot perform local search.")
+        
+        iteration = 0
+        objectives = [(self.objective, "start")]
+        selections = [self.selection.copy()]
+
+        solution_changed = False
+        while iteration < max_iterations:
+            solution_changed = False
+            # Try removing a point
+            for idx_to_remove in self.generate_indices_remove():
+                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove)
+                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                    self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                    solution_changed = True
+                    objectives.append((self.objective, f"removed {idx_to_remove} from cluster {self.clusters[idx_to_remove]}"))
+                    selections.append(self.selection.copy())
+                    break
+            # Try adding a point
+            if not solution_changed:
+                for idx_to_add in self.generate_indices_add():
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"added {idx_to_add} from cluster {self.clusters[idx_to_add]}"))
+                        selections.append(self.selection.copy())
+                        break
+            # Try swapping a selected point and unselected point
+            if not solution_changed:
+                if best_swap:
+                    best_swap_candidate = (self.objective, None, None, None, None, False)
+                    for idx_to_add, idx_to_remove in self.generate_indices_swap():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        if candidate_objective < best_swap_candidate[0] and np.abs(candidate_objective - best_swap_candidate[0]) > 1e-8:
+                            best_swap_candidate = (candidate_objective, idx_to_add, idx_to_remove, add_within_cluster, add_for_other_clusters, True)
+                    if best_swap_candidate[5]:
+                        self.accept_swap(best_swap_candidate[1], best_swap_candidate[2], best_swap_candidate[0], best_swap_candidate[3], best_swap_candidate[4])
+                        solution_changed = True
+                        objectives.append((self.objective, f"swapped {best_swap_candidate[2]} for {best_swap_candidate[1]} in cluster {self.clusters[best_swap_candidate[1]]}"))
+                        selections.append(self.selection.copy())
+                else:
+                    for idx_to_add, idx_to_remove in self.generate_indices_swap():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                            self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            solution_changed = True
+                            objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
+                            selections.append(self.selection.copy())
+                            break
+            # Try swapping two selected points with one unselected point
+            if not solution_changed:
+                for (idx_to_add1, idx_to_add2), idx_to_remove in self.generate_indices_doubleswap():
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"doubleswapped {idx_to_remove} for {idx_to_add1} and {idx_to_add2} in cluster {self.clusters[idx_to_add1]}"))
+                        selections.append(self.selection.copy())
+                        break
+            
+            if not solution_changed:
+                break
+            else:
+                iteration += 1
+                if iteration % 50 == 0:
+                    print(f"Iteration {iteration}: Objective = {self.objective}")
+
+        return objectives, selections
+
+    def simulated_annealing(self, max_iterations=1000, initial_temperature=1.0, cooling_rate=0.99):
+        """
+        Perform simulated annealing to find a (local) optimal solution.
+        
+        Parameters:
+        -----------
+        max_iterations: int
+            The maximum number of iterations to perform.
+        initial_temperature: float
+            The initial temperature for the annealing process.
+        cooling_rate: float
+            The rate at which the temperature decreases.
+        """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot perform simulated annealing.")
+        
+        iteration = 0
+        temperature = initial_temperature
+        objectives = [(self.objective, "start")]
+        selections = [self.selection.copy()]
+
+        solution_changed = False
+        times_unchanged = 0
+        while iteration < max_iterations:
+            solution_changed = False
+            operations = [
+                ("add", self.generate_indices_add),
+                ("swap", self.generate_indices_swap),
+                ("doubleswap", self.generate_indices_doubleswap),
+                ("remove", self.generate_indices_remove),
+            ]
+            np.random.shuffle(operations)  # Randomize the order of operations
+
+            for operation, generator in operations:
+                if operation == "add":
+                    for idx_to_add in generator():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add)
+                        delta_objective = round(candidate_objective - self.objective, 6)
+                        if delta_objective < 0 or np.random.rand() < np.exp(-delta_objective / temperature):
+                            self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            solution_changed = True
+                            objectives.append((self.objective, f"added {idx_to_add} from cluster {self.clusters[idx_to_add]}"))
+                            selections.append(self.selection.copy())
+                            break
+
+                elif operation == "swap":
+                    for idx_to_add, idx_to_remove in generator():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        delta_objective = round(candidate_objective - self.objective, 6)
+                        if delta_objective < 0 or np.random.rand() < np.exp(-delta_objective / temperature):
+                            self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            solution_changed = True
+                            objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
+                            selections.append(self.selection.copy())
+                            break
+
+                elif operation == "doubleswap":
+                    for (idx_to_add1, idx_to_add2), idx_to_remove in generator():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove)
+                        delta_objective = round(candidate_objective - self.objective, 6)
+                        if delta_objective < 0 or np.random.rand() < np.exp(-delta_objective / temperature):
+                            self.accept_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            solution_changed = True
+                            objectives.append((self.objective, f"doubleswapped {idx_to_remove} for {idx_to_add1} and {idx_to_add2} in cluster {self.clusters[idx_to_add1]}"))
+                            selections.append(self.selection.copy())
+                            break
+
+                elif operation == "remove":
+                    for idx_to_remove in generator():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove)
+                        delta_objective = round(candidate_objective - self.objective, 6)
+                        if delta_objective < 0 or np.random.rand() < np.exp(-delta_objective / temperature):
+                            self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            solution_changed = True
+                            objectives.append((self.objective, f"removed {idx_to_remove} from cluster {self.clusters[idx_to_remove]}"))
+                            selections.append(self.selection.copy())
+                            break
+
+                if solution_changed:
+                    times_unchanged = 0
+                    break
+                else:
+                    times_unchanged += 1
+                    if times_unchanged > 10:
+                        return objectives, selections
+                    
+            # Cool down the temperature
+            temperature *= cooling_rate
+            iteration += 1
+
+            if iteration % 50 == 0:
+                print(f"Iteration {iteration}: Objective = {self.objective}, Temperature = {temperature}")
+
+        return objectives, selections
 
     def generate_indices_add(self):
         """
@@ -747,3 +1002,26 @@ class Solution:
             if len(self.selection_per_cluster[cluster]) > 1:
                 for idx in self.selection_per_cluster[cluster]:
                     yield idx
+
+    def generate_random_moves(self):
+        """
+        Creates a generator that randomly picks from the existing generators
+        (add, swap, doubleswap, remove) until all of them are empty.
+        """
+        generators = {
+            "add": self.generate_indices_add(),
+            "swap": self.generate_indices_swap(),
+            "doubleswap": self.generate_indices_doubleswap(),
+            "remove": self.generate_indices_remove(),
+        }
+        active_generators = list(generators.keys())
+
+        while active_generators:
+            # Randomly pick an active generator
+            selected_generator = np.random.choice(active_generators)
+            try:
+                # Yield the next value from the selected generator
+                yield selected_generator, next(generators[selected_generator])
+            except StopIteration:
+                # Remove the generator if it is exhausted
+                active_generators.remove(selected_generator)
