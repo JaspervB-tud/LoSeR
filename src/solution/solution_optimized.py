@@ -46,7 +46,7 @@ class Solution:
             self.objective = np.sum(self.selection) * self.selection_cost
             # INTRA cluster distances
             for idx in np.where(~self.selection)[0]:
-                cur_min = np.inf
+                cur_min = np.float32(np.inf)
                 cur_idx = idx
                 for other_idx in np.where((self.clusters == self.clusters[idx]) & self.selection)[0]:
                     cur_dist = self.distances[idx, other_idx]
@@ -60,10 +60,10 @@ class Solution:
             for cluster_pair in itertools.combinations(self.unique_clusters, 2):
                 cluster_1 = np.where((self.clusters == cluster_pair[0]) & self.selection)[0]
                 cluster_2 = np.where((self.clusters == cluster_pair[1]) & self.selection)[0]
-                cur_max = -np.inf
+                cur_max = -np.float32(np.inf)
                 cur_pair = (None, None)
                 for point_pair in itertools.product(cluster_1, cluster_2):
-                    cur_dist = 1 - self.distances[point_pair[0], point_pair[1]]
+                    cur_dist = 1.0 - self.distances[point_pair[0], point_pair[1]] #WARNING: precision errors might occur here!!
                     if cur_dist > cur_max:
                         cur_max = cur_dist
                         cur_pair = point_pair
@@ -71,6 +71,7 @@ class Solution:
                 self.closest_distances_inter[cluster_pair[1], cluster_pair[0]] = cur_max
                 self.closest_points_inter[(cluster_pair[0], cluster_pair[1])] = cur_pair  # Store the first point index
                 self.objective += cur_max
+
         else:
             # If selection provided is not feasible, don't do anything (YET)
             self.objective = np.inf
@@ -267,7 +268,6 @@ class Solution:
         # Update objective value
         self.objective = candidate_objective
 
-
     def evaluate_doubleswap(self, idxs_to_add, idx_to_remove):
         """
         Evaluates whether the proposed double swap improves the current solution.
@@ -350,6 +350,54 @@ class Solution:
                         add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
+
+    def accept_doubleswap(self, idxs_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the double swap of a pair of points to the solution.
+        Note that this assumes that the initial solution
+        was feasible.
+        -----------------------------------------------------
+        PARAMETERS:
+        idxs_to_add: tuple of ints
+            The indices of the points to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
+            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+        """
+        idx_to_add1, idx_to_add2 = idxs_to_add
+        cluster = self.clusters[idx_to_add1]
+        # Update selected points
+        self.selection[idx_to_add1] = True
+        self.selection[idx_to_add2] = True
+        self.selection[idx_to_remove] = False
+        self.selection_per_cluster[cluster].add(idx_to_add1)
+        self.selection_per_cluster[cluster].add(idx_to_add2)
+        self.selection_per_cluster[cluster].remove(idx_to_remove)
+        self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add1)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add2)
+        # Update intra cluster distances (add_within_cluster)
+        for idx, new_closest_point, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = new_closest_point
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, cur_closest_pair, dist in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+        # Update objective value
+        self.objective = candidate_objective
 
     def determine_feasibility(self):
         uncovered_clusters = set(self.unique_clusters)
