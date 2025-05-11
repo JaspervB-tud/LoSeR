@@ -29,6 +29,9 @@ class Solution:
         self.unique_clusters = np.unique(self.clusters)
         self.selection_cost = selection_cost
 
+        self.inter_normalization = len(self.unique_clusters) * (len(self.unique_clusters) - 1) / 2 # normalization factor for inter cluster distances
+        self.intra_normalization = len(self.unique_clusters) # normalization factor for intra cluster distances
+
         # Process initial representation to optimize for comparisons speed
         self.points_per_cluster = {cluster: set(np.where(self.clusters == cluster)[0]) for cluster in self.unique_clusters} #points in every cluster
         self.selection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & selection)[0]) for cluster in self.unique_clusters} #selected points in every cluster
@@ -56,7 +59,7 @@ class Solution:
                         cur_idx = other_idx
                 self.closest_distances_intra[idx] = cur_min
                 self.closest_points_intra[idx] = cur_idx
-                self.objective += cur_min
+                self.objective += cur_min / self.intra_normalization # divide by number of clusters to normalize the objective value
             # INTER cluster distances
             for cluster_pair in itertools.combinations(self.unique_clusters, 2):
                 cluster_1 = np.where((self.clusters == cluster_pair[0]) & self.selection)[0]
@@ -71,7 +74,7 @@ class Solution:
                 self.closest_distances_inter[cluster_pair[0], cluster_pair[1]] = cur_max
                 self.closest_distances_inter[cluster_pair[1], cluster_pair[0]] = cur_max
                 self.closest_points_inter[(cluster_pair[0], cluster_pair[1])] = cur_pair  # Store the first point index
-                self.objective += cur_max
+                self.objective += cur_max / self.inter_normalization # divide by number of pairs of clusters to normalize the objective value
 
         else:
             # If selection provided is not feasible, don't do anything (YET)
@@ -225,7 +228,7 @@ class Solution:
         for idx in self.nonselection_per_cluster[cluster]:
             cur_dist = self.distances[idx, idx_to_add] # distance to current point (idx)
             if cur_dist < self.closest_distances_intra[idx]:
-                candidate_objective += cur_dist - self.closest_distances_intra[idx]
+                candidate_objective += (cur_dist - self.closest_distances_intra[idx]) / self.intra_normalization
                 add_within_cluster.append((idx, cur_dist))
         # Calculate inter cluster distances for all other clusters
         add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
@@ -239,7 +242,7 @@ class Solution:
                         cur_max = cur_similarity
                         cur_idx = idx
                 if cur_idx > -1:
-                    candidate_objective += cur_max - self.closest_distances_inter[cluster, other_cluster]
+                    candidate_objective += (cur_max - self.closest_distances_inter[cluster, other_cluster]) / self.inter_normalization
                     add_for_other_clusters.append((other_cluster, cur_max, cur_idx))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
@@ -314,12 +317,12 @@ class Solution:
                     if cur_dist < cur_closest_distance:
                         cur_closest_distance = cur_dist
                         cur_closest_point = other_idx
-                candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
+                candidate_objective += (cur_closest_distance - self.closest_distances_intra[idx]) / self.intra_normalization
                 add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
             else: #point to be removed is not closest, check if newly added point is closer
                 cur_dist = self.distances[idx, idx_to_add]
                 if cur_dist < cur_closest_distance:
-                    candidate_objective += cur_dist - cur_closest_distance
+                    candidate_objective += (cur_dist - cur_closest_distance) / self.intra_normalization
                     add_within_cluster.append((idx, idx_to_add, cur_dist))
         # Calculate inter cluster distances for all other clusters
         add_for_other_clusters = []
@@ -342,7 +345,7 @@ class Solution:
                                     cur_closest_pair = (idx, other_idx)
                                 else:
                                     cur_closest_pair = (other_idx, idx)
-                    candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
+                    candidate_objective += (cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]) / self.inter_normalization
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
                 else: #point to be removed is not closest, check if newly added point is closer
                     for idx in self.selection_per_cluster[other_cluster]:
@@ -354,7 +357,7 @@ class Solution:
                             else:
                                 cur_closest_pair = (idx_to_add, idx)
                     if cur_closest_pair[0] > -1:
-                        candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
+                        candidate_objective += (cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]) / self.inter_normalization
                         add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
@@ -437,14 +440,14 @@ class Solution:
                     if cur_dist < cur_closest_distance:
                         cur_closest_distance = cur_dist
                         cur_closest_point = other_idx
-                candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
+                candidate_objective += (cur_closest_distance - self.closest_distances_intra[idx]) / self.intra_normalization
                 add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
             else: #point to be removed is not closest, check if one of newly added points is closer
                 cur_dist1 = self.distances[idx, idx_to_add1]
                 cur_dist2 = self.distances[idx, idx_to_add2]
                 cur_dist, idx_to_add = min((cur_dist1, idx_to_add1), (cur_dist2, idx_to_add2), key = lambda x: x[0])
                 if cur_dist < cur_closest_distance:
-                    candidate_objective += cur_dist - cur_closest_distance
+                    candidate_objective += (cur_dist - cur_closest_distance) / self.intra_normalization
                     add_within_cluster.append((idx, idx_to_add, cur_dist))
         # Calculate inter cluster distances for all other clusters
         #   - Check if removed point was closest selected point for any of the other clusters -> if so replace with another point (looping over all selected points in cluster)
@@ -469,7 +472,7 @@ class Solution:
                                     cur_closest_pair = (idx, other_idx)
                                 else:
                                     cur_closest_pair = (other_idx, idx)
-                    candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
+                    candidate_objective += (cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]) / self.inter_normalization
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
                 else: #point to be removed is not closest, check if newly added points are closer
                     for idx in self.selection_per_cluster[other_cluster]:
@@ -483,7 +486,7 @@ class Solution:
                             else:
                                 cur_closest_pair = (idx_to_add, idx)
                     if cur_closest_pair[0] > -1:
-                        candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
+                        candidate_objective += (cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]) / self.inter_normalization
                         add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
@@ -567,7 +570,7 @@ class Solution:
                         if cur_dist < cur_closest_distance:
                             cur_closest_distance = cur_dist
                             cur_closest_point = other_idx
-                candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
+                candidate_objective += (cur_closest_distance - self.closest_distances_intra[idx]) / self.intra_normalization
                 add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
         # Calculate inter cluster distances for all other clusters
         #  - Check if removed point was closest selected point for any of the other clusters -> if so replace with another point (looping over all selected points in cluster)
@@ -591,7 +594,7 @@ class Solution:
                                     cur_closest_pair = (idx, other_idx)
                                 else:
                                     cur_closest_pair = (other_idx, idx)
-                    candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
+                    candidate_objective += (cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]) / self.inter_normalization
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
         
         return candidate_objective, add_within_cluster, add_for_other_clusters

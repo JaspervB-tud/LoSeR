@@ -1816,12 +1816,15 @@ def test_accept_remove_5():
 def groundtruth_objective_value(selection, clusters, distances, selection_cost):
     # Cost for selecting items
     objective_value = np.sum(selection) * selection_cost
+
+    inter_normalization = len(np.unique(clusters)) * (len(np.unique(clusters)) - 1) / 2 # normalization factor for inter cluster distances
+    intra_normalization = len(np.unique(clusters)) # normalization factor for intra cluster distances
     # Intra cluster costs
     for idx in np.where(~selection)[0]:
         cur_min = np.inf
         for other_idx in np.where((clusters == clusters[idx]) & selection)[0]:
             cur_min = min(cur_min, distances[idx, other_idx])
-        objective_value += cur_min
+        objective_value += cur_min / intra_normalization
     # Inter cluster costs
     unique_clusters = np.unique(clusters)
     for cluster_pair in itertools.combinations(unique_clusters, 2):
@@ -1830,7 +1833,7 @@ def groundtruth_objective_value(selection, clusters, distances, selection_cost):
         cur_max = -np.inf
         for point_pair in itertools.product(cluster_1, cluster_2):
             cur_max = max(cur_max, 1 - distances[point_pair[0], point_pair[1]])
-        objective_value += cur_max
+        objective_value += cur_max / inter_normalization
     return objective_value
 
 def compare_tuples(t1, t2):
