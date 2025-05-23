@@ -1,7 +1,9 @@
 import numpy as np
+from scipy.spatial.distance import squareform
 import itertools
 import math
 from decimal import Decimal, getcontext
+
 
 class Solution:
     def __init__(self, distances, clusters, selection=None, selection_cost=0.1):
@@ -24,10 +26,11 @@ class Solution:
 
         # Initialize object attributes
         self.selection = selection.copy()
-        self.distances = distances.copy()
+        self.distances = squareform(distances.copy())
         self.clusters = clusters.copy()
         self.unique_clusters = np.unique(self.clusters)
         self.selection_cost = selection_cost
+        self.num_points = distances.shape[0]
 
         # Process initial representation to optimize for comparisons speed
         self.points_per_cluster = {cluster: set(np.where(self.clusters == cluster)[0]) for cluster in self.unique_clusters} #points in every cluster
@@ -50,7 +53,7 @@ class Solution:
                 cur_min = np.float32(np.inf)
                 cur_idx = idx
                 for other_idx in np.where((self.clusters == self.clusters[idx]) & self.selection)[0]:
-                    cur_dist = self.distances[idx, other_idx]
+                    cur_dist = self.get_distance(idx, other_idx)
                     if cur_dist < cur_min:
                         cur_min = cur_dist
                         cur_idx = other_idx
@@ -64,7 +67,7 @@ class Solution:
                 cur_max = -np.float32(np.inf)
                 cur_pair = (None, None)
                 for point_pair in itertools.product(cluster_1, cluster_2):
-                    cur_dist = 1.0 - self.distances[point_pair[0], point_pair[1]] #WARNING: precision errors might occur here!!
+                    cur_dist = 1.0 - self.get_distance(point_pair[0], point_pair[1]) #WARNING: precision errors might occur here!!
                     if cur_dist > cur_max:
                         cur_max = cur_dist
                         cur_pair = point_pair
@@ -223,7 +226,7 @@ class Solution:
         # Calculate intra cluster distances for cluster of new point
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in self.nonselection_per_cluster[cluster]:
-            cur_dist = self.distances[idx, idx_to_add] # distance to current point (idx)
+            cur_dist = self.get_distance(idx, idx_to_add) # distance to current point (idx)
             if cur_dist < self.closest_distances_intra[idx]:
                 candidate_objective += cur_dist - self.closest_distances_intra[idx]
                 add_within_cluster.append((idx, cur_dist))
@@ -234,7 +237,7 @@ class Solution:
                 cur_max = self.closest_distances_inter[cluster, other_cluster]
                 cur_idx = -1
                 for idx in self.selection_per_cluster[other_cluster]:
-                    cur_similarity = 1 - self.distances[idx, idx_to_add] #this is the similarity, if it is more similar then change solution
+                    cur_similarity = 1 - self.get_distance(idx, idx_to_add) #this is the similarity, if it is more similar then change solution
                     if cur_similarity > cur_max:
                         cur_max = cur_similarity
                         cur_idx = idx
@@ -310,14 +313,14 @@ class Solution:
             if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
                 cur_closest_distance = np.inf
                 for other_idx in new_selection:
-                    cur_dist = self.distances[idx, other_idx]
+                    cur_dist = self.get_distance(idx, other_idx)
                     if cur_dist < cur_closest_distance:
                         cur_closest_distance = cur_dist
                         cur_closest_point = other_idx
                 candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
                 add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
             else: #point to be removed is not closest, check if newly added point is closer
-                cur_dist = self.distances[idx, idx_to_add]
+                cur_dist = self.get_distance(idx, idx_to_add)
                 if cur_dist < cur_closest_distance:
                     candidate_objective += cur_dist - cur_closest_distance
                     add_within_cluster.append((idx, idx_to_add, cur_dist))
@@ -335,7 +338,7 @@ class Solution:
                     cur_closest_similarity = -np.inf
                     for idx in self.selection_per_cluster[other_cluster]:
                         for other_idx in new_selection:
-                            cur_similarity = 1 - self.distances[idx, other_idx]
+                            cur_similarity = 1 - self.get_distance(idx, other_idx)
                             if cur_similarity > cur_closest_similarity:
                                 cur_closest_similarity = cur_similarity
                                 if other_cluster < cluster:
@@ -346,7 +349,7 @@ class Solution:
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
                 else: #point to be removed is not closest, check if newly added point is closer
                     for idx in self.selection_per_cluster[other_cluster]:
-                        cur_similarity = 1 - self.distances[idx, idx_to_add]
+                        cur_similarity = 1 - self.get_distance(idx, idx_to_add)
                         if cur_similarity > cur_closest_similarity:
                             cur_closest_similarity = cur_similarity
                             if other_cluster < cluster:
@@ -433,15 +436,15 @@ class Solution:
             if cur_closest_point == idx_to_remove:
                 cur_closest_distance = np.inf
                 for other_idx in new_selection:
-                    cur_dist = self.distances[idx, other_idx]
+                    cur_dist = self.get_distance(idx, other_idx)
                     if cur_dist < cur_closest_distance:
                         cur_closest_distance = cur_dist
                         cur_closest_point = other_idx
                 candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
                 add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
             else: #point to be removed is not closest, check if one of newly added points is closer
-                cur_dist1 = self.distances[idx, idx_to_add1]
-                cur_dist2 = self.distances[idx, idx_to_add2]
+                cur_dist1 = self.get_distance(idx, idx_to_add1)
+                cur_dist2 = self.get_distance(idx, idx_to_add2)
                 cur_dist, idx_to_add = min((cur_dist1, idx_to_add1), (cur_dist2, idx_to_add2), key = lambda x: x[0])
                 if cur_dist < cur_closest_distance:
                     candidate_objective += cur_dist - cur_closest_distance
@@ -462,7 +465,7 @@ class Solution:
                     cur_closest_similarity = -np.inf
                     for idx in self.selection_per_cluster[other_cluster]:
                         for other_idx in new_selection:
-                            cur_similarity = 1 - self.distances[idx, other_idx]
+                            cur_similarity = 1 - self.get_distance(idx, other_idx)
                             if cur_similarity > cur_closest_similarity:
                                 cur_closest_similarity = cur_similarity
                                 if other_cluster < cluster:
@@ -473,8 +476,8 @@ class Solution:
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
                 else: #point to be removed is not closest, check if newly added points are closer
                     for idx in self.selection_per_cluster[other_cluster]:
-                        cur_similarity1 = 1 - self.distances[idx, idx_to_add1]
-                        cur_similarity2 = 1 - self.distances[idx, idx_to_add2]
+                        cur_similarity1 = 1 - self.get_distance(idx, idx_to_add1)
+                        cur_similarity2 = 1 - self.get_distance(idx, idx_to_add2)
                         cur_similarity, idx_to_add = max((cur_similarity1, idx_to_add1), (cur_similarity2, idx_to_add2), key = lambda x: x[0])
                         if cur_similarity > cur_closest_similarity:
                             cur_closest_similarity = cur_similarity
@@ -563,7 +566,7 @@ class Solution:
                 cur_closest_distance = np.inf
                 for other_idx in new_selection:
                     if other_idx != idx:
-                        cur_dist = self.distances[idx, other_idx]
+                        cur_dist = self.get_distance(idx, other_idx)
                         if cur_dist < cur_closest_distance:
                             cur_closest_distance = cur_dist
                             cur_closest_point = other_idx
@@ -584,7 +587,7 @@ class Solution:
                     cur_closest_similarity = -np.inf
                     for idx in self.selection_per_cluster[other_cluster]:
                         for other_idx in new_selection:
-                            cur_similarity = 1 - self.distances[idx, other_idx]
+                            cur_similarity = 1 - self.get_distance(idx, other_idx)
                             if cur_similarity > cur_closest_similarity:
                                 cur_closest_similarity = cur_similarity
                                 if other_cluster < cluster:
@@ -717,7 +720,7 @@ class Solution:
                 break
             else:
                 iteration += 1
-                if iteration % 50 == 0:
+                if iteration % 200 == 0:
                     print(f"Iteration {iteration}: Objective = {self.objective}")
 
         return objectives, selections
@@ -783,7 +786,7 @@ class Solution:
                 break
             else:
                 iteration += 1
-                if iteration % 50 == 0:
+                if iteration % 200 == 0:
                     print(f"Iteration {iteration}: Objective = {self.objective}")
 
         return objectives, selections
@@ -865,7 +868,7 @@ class Solution:
                 break
             else:
                 iteration += 1
-                if iteration % 50 == 0:
+                if iteration % 200 == 0:
                     print(f"Iteration {iteration}: Objective = {self.objective}")
 
         return objectives, selections
@@ -1025,3 +1028,15 @@ class Solution:
             except StopIteration:
                 # Remove the generator if it is exhausted
                 active_generators.remove(selected_generator)
+
+    def get_distance(self, idx1, idx2):
+        """
+        Returns the distance between two points which has to be
+        converted since the distance matrix is stored as a
+        condensed matrix.
+        """
+        if idx1 == idx2:
+            return 0.0
+        if idx1 > idx2:
+            idx1, idx2 = idx2, idx1
+        return self.distances[self.num_points * idx1 - (idx1 * (idx1 + 1)) // 2 + idx2 - idx1 - 1]
