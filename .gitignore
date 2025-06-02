@@ -1,2 +1,5 @@
 src/sandbox.ipynb
 src/sandbox.py
+src/sandbox2.ipynb
+src/sandbox_vectorized.ipynb
+src/sandbox_parallel.ipynb

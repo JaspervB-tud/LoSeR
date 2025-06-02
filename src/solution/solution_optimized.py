@@ -4,7 +4,7 @@ import itertools
 import math
 from decimal import Decimal, getcontext
 from concurrent.futures import ProcessPoolExecutor, as_completed, wait, ALL_COMPLETED
-
+import multiprocessing.shared_memory as shm
 
 class Solution:
     def __init__(self, distances, clusters, selection=None, selection_cost=0.1):
@@ -877,7 +877,7 @@ class Solution:
 
         return objectives, selections
 
-    def local_search_parallel(self, max_iterations=1000, num_cores=None):
+    def local_search_parallel(self, max_iterations=1000, best_swap=False, num_cores=None):
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot perform local search.")
         
@@ -885,34 +885,74 @@ class Solution:
         objectives = [(self.objective, "start")]
         selections = [self.selection.copy()]
 
+        # Create shared memory for selection, objective, distances, clusters, unique clusters
+        distances_shm = shm.SharedMemory(create=True, size=self.distances.nbytes)
+        shared_distances = np.ndarray(self.distances.shape, dtype=self.distances.dtype, buffer=distances_shm.buf)
+        np.copyto(shared_distances, self.distances)
+
+
         solution_changed = False
         while iteration < max_iterations:
             solution_changed = False
-
-            with ProcessPoolExecutor(max_workers=num_cores) as executor:
-                futures = {executor.submit(self.evaluate_add, idx): idx for idx in self.generate_indices_add()}
-                try:
-                    for future in as_completed(futures):
-                        idx_to_add = futures[future]
-                        candidate_objective, add_within_cluster, add_for_other_clusters = future.result()
-                        if candidate_objective < self.objective and abs(candidate_objective - self.objective) > 1e-8:
-                            print("Accepting new solution in iteration", iteration)
-                            self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
+            # Try adding a point
+            for idx_to_add in self.generate_indices_add():
+                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add)
+                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                    self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
+                    solution_changed = True
+                    objectives.append((self.objective, f"added {idx_to_add} from cluster {self.clusters[idx_to_add]}"))
+                    selections.append(self.selection.copy())
+                    break
+            # Try swapping a selected point and unselected point
+            if not solution_changed:
+                if best_swap:
+                    best_swap_candidate = (self.objective, None, None, None, None, False)
+                    for idx_to_add, idx_to_remove in self.generate_indices_swap():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        if candidate_objective < best_swap_candidate[0] and np.abs(candidate_objective - best_swap_candidate[0]) > 1e-8:
+                            best_swap_candidate = (candidate_objective, idx_to_add, idx_to_remove, add_within_cluster, add_for_other_clusters, True)
+                    if best_swap_candidate[5]:
+                        self.accept_swap(best_swap_candidate[1], best_swap_candidate[2], best_swap_candidate[0], best_swap_candidate[3], best_swap_candidate[4])
+                        solution_changed = True
+                        objectives.append((self.objective, f"swapped {best_swap_candidate[2]} for {best_swap_candidate[1]} in cluster {self.clusters[best_swap_candidate[1]]}"))
+                        selections.append(self.selection.copy())
+                else:
+                    for idx_to_add, idx_to_remove in self.generate_indices_swap():
+                        candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                            self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
                             solution_changed = True
-
-                            # Stop spawning new workers
-                            executor.shutdown(wait=False, cancel_futures=True)
+                            objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
+                            selections.append(self.selection.copy())
                             break
-                except Exception as e:
-                    print(f"Exception occurred: {e}")
-                finally:
-                    for future in futures:
-                        future.cancel()
-
+            # Try swapping two selected points with one unselected point
+            if not solution_changed:
+                for (idx_to_add1, idx_to_add2), idx_to_remove in self.generate_indices_doubleswap():
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"doubleswapped {idx_to_remove} for {idx_to_add1} and {idx_to_add2} in cluster {self.clusters[idx_to_add1]}"))
+                        selections.append(self.selection.copy())
+                        break
+            # Try removing a point
+            if not solution_changed:
+                for idx_to_remove in self.generate_indices_remove():
+                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove)
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                        self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                        solution_changed = True
+                        objectives.append((self.objective, f"removed {idx_to_remove} from cluster {self.clusters[idx_to_remove]}"))
+                        selections.append(self.selection.copy())
+                        break
             if not solution_changed:
                 break
             else:
                 iteration += 1
+                if iteration % 200 == 0:
+                    print(f"Iteration {iteration}: Objective = {self.objective}")
+
+        return objectives, selections
 
     def simulated_annealing(self, max_iterations=1000, initial_temperature=1.0, cooling_rate=0.99):
         """
@@ -1081,3 +1121,105 @@ class Solution:
         if idx1 > idx2:
             idx1, idx2 = idx2, idx1
         return self.distances[self.num_points * idx1 - (idx1 * (idx1 + 1)) // 2 + idx2 - idx1 - 1]
+    
+"""
+Here we define helper functions that can be used by the multiprocessing version of the local search.
+"""
+def evaluate_add_helper_shm(
+        idx_to_add, distances, clusters, unique_clusters, objective, selection_cost, num_points,
+        selection_per_cluster, nonselection_per_cluster,
+        closest_distances_intra, closest_distances_inter):
+        """
+        Evaluates the effect of adding a point to the solution without relying on an explicit instance
+        of the Solution class.
+        NOTE: This function is designed to be used with shared memory for parallel processing!
+        NOTE: In the current implementation, there is no check for feasibility, so it is assumed
+                that the point can be added without violating any constraints!
+        Parameters:
+        -----------
+        idx_to_add: int
+            The index of the point to be added.
+        distances: np.ndarray
+            The condensed distance (between points) matrix.
+        clusters: np.ndarray
+            The cluster assignments for each point.
+        unique_clusters: np.ndarray
+            The unique clusters present in the solution.
+        objective: float
+            The current objective value of the solution.
+        selection_cost: float
+            The cost associated with selecting a point.
+        num_points: int
+            The total number of points in the dataset.
+        selection_per_cluster: dict
+            A dictionary mapping each cluster to a set of indices of selected points in that cluster.
+        nonselection_per_cluster: dict
+            A dictionary mapping each cluster to a set of indices of non-selected points in that cluster.
+        closest_distances_intra: np.ndarray
+            A 1D array containing the closest intra-cluster distances for each point.
+        closest_distances_inter: np.ndarray
+            An array containing the closest inter-cluster distances between clusters.
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value if the point is added.
+        add_within_cluster: list
+            A list of tuples (index, distance) for points within the cluster of the new point that would be updated.
+        add_for_other_clusters: list
+            A list of tuples (other_cluster, similarity, index) for points in other clusters that would be updated.
+        """
+        cluster = clusters[idx_to_add]
+        candidate_objective = objective + selection_cost # cost for adding the point
+        try:
+            D = shm.SharedMemory(name=distances[0])
+            D_array = np.ndarray(distances[1], dtype=np.float32, buffer=D.buf)
+
+            # Calculate intra cluster distances for cluster of new point
+            add_within_cluster = [] #this stores changes that have to be made if the objective improves
+            for idx in nonselection_per_cluster[cluster]:
+                cur_dist = get_distance(idx, idx_to_add, D_array, num_points) # distance to current point (idx)
+                if cur_dist < closest_distances_intra[idx]:
+                    candidate_objective += cur_dist - closest_distances_intra[idx]
+                    add_within_cluster.append((idx, cur_dist))
+
+            # Calculate inter cluster distances for all other clusters
+            add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
+            for other_cluster in unique_clusters:
+                if other_cluster != cluster:
+                    cur_max = get_distance(cluster, other_cluster, closest_distances_inter, unique_clusters.shape[0])
+                    cur_idx = -1
+                    for idx in selection_per_cluster[other_cluster]:
+                        cur_similarity = 1.0 - get_distance(idx, idx_to_add, D_array, num_points) #this is the similarity, if it is more similar then change solution
+                        if cur_similarity > cur_max:
+                            cur_max = cur_similarity
+                            cur_idx = idx
+                    if cur_idx > -1:
+                        candidate_objective += cur_max - get_distance(cluster, other_cluster, closest_distances_inter, unique_clusters.shape[0])
+                        add_for_other_clusters.append((other_cluster, cur_max, cur_idx))
+        except Exception as e:
+            print(f"Error in evaluate_add_helper_shm: {e}")
+            return None, None, None
+        finally:
+            D.close()
+        return candidate_objective, add_within_cluster, add_for_other_clusters
+
+def get_index(idx1, idx2, num_points):
+    """
+    Returns the index in the condensed distance matrix for the given pair of indices.
+    """
+    if idx1 == idx2:
+        return -1
+    if idx1 > idx2:
+        idx1, idx2 = idx2, idx1
+    return num_points * idx1 - (idx1 * (idx1 + 1)) // 2 + idx2 - idx1 - 1
+
+def get_distance(idx1, idx2, distances, num_points):
+    """
+    Returns the distance between two points which has to be
+    converted since the distance matrix is stored as a
+    condensed matrix.
+    """
+    if idx1 == idx2:
+        return 0.0
+    index = get_index(idx1, idx2, num_points)
+    return distances[index]
