@@ -46,6 +46,11 @@ class Solution:
         # INTER cluster information
         self.closest_distances_inter = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.float32) #distances to closest selected point
         self.closest_points_inter = {pair: (None, None) for pair in itertools.combinations(self.unique_clusters, 2)} #indices of closest selected point
+        """
+        Interpretation of closest_points_inter_array: given a pair of clusters (cluster1, cluster2),
+        the value at closest_points_inter_array[cluster1, cluster2] is the index of the point in cluster2 that is closest to any point in cluster1.
+        The value at closest_points_inter_array[cluster2, cluster1] is the index of the point in cluster1 that is closest to any point in cluster2.
+        """
         self.closest_points_inter_array = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.int32) #row=from, col=to
 
         self.feasible = self.determine_feasibility()
@@ -296,6 +301,46 @@ class Solution:
                 self.closest_points_inter[(cluster, other_cluster)] = (idx_to_add, idx)
         # Update objective value
         self.objective = candidate_objective
+
+    def accept_add_exp(self, idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the addition of a point to the solution.
+        Note that this assumes that the initial solution
+        was feasible.
+        ------------------------------------------------
+        PARAMETERS:
+        idx_to_add: int
+            The index of the point to be added.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_distance, index_in_other_cluster)]
+        """
+        cluster = self.clusters[idx_to_add]
+        # Update selected points
+        self.selection[idx_to_add] = True
+        self.selection_per_cluster[cluster].add(idx_to_add)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add) #explicitly remove instead of discard since it should throw an error if not selected
+        # Update intra cluster distances (add_within_cluster)
+        for idx, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = idx_to_add
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, dist, idx in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = (idx, idx_to_add)
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = (idx_to_add, idx)
+            self.closest_points_inter_array[cluster, other_cluster] = idx
+            self.closest_points_inter_array[other_cluster, cluster] = idx_to_add
+        # Update objective value
+        self.objective = candidate_objective
          
     def evaluate_swap(self, idx_to_add, idx_to_remove):
         """
@@ -414,6 +459,54 @@ class Solution:
                 self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
             else:
                 self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+        # Update objective value
+        self.objective = candidate_objective
+
+    def accept_swap_exp(self, idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the swap of a pair of points to the solution.
+        Note that this assumes that the initial solution
+        was feasible.
+        -----------------------------------------------------
+        PARAMETERS:
+        idx_to_add: int
+            The index of the point to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
+            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+        """
+        cluster = self.clusters[idx_to_add]
+        # Update selected points
+        self.selection[idx_to_add] = True
+        self.selection[idx_to_remove] = False
+        self.selection_per_cluster[cluster].add(idx_to_add)
+        self.selection_per_cluster[cluster].remove(idx_to_remove)
+        self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add)
+        # Update intra cluster distances (add_within_cluster)
+        for idx, new_closest_point, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = new_closest_point
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, cur_closest_pair, dist in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
+                self.closest_points_inter_array[(other_cluster, cluster)] = cur_closest_pair[1]
+                self.closest_points_inter_array[(cluster, other_cluster)] = cur_closest_pair[0]
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+                self.closest_points_inter_array[(cluster, other_cluster)] = cur_closest_pair[1]
+                self.closest_points_inter_array[(other_cluster, cluster)] = cur_closest_pair[0]
         # Update objective value
         self.objective = candidate_objective
 
@@ -550,6 +643,58 @@ class Solution:
         # Update objective value
         self.objective = candidate_objective
 
+    def accept_doubleswap_exp(self, idxs_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the double swap of a pair of points to the solution.
+        Note that this assumes that the initial solution
+        was feasible.
+        -----------------------------------------------------
+        PARAMETERS:
+        idxs_to_add: tuple of ints
+            The indices of the points to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
+            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+        """
+        idx_to_add1, idx_to_add2 = idxs_to_add
+        cluster = self.clusters[idx_to_add1]
+        # Update selected points
+        self.selection[idx_to_add1] = True
+        self.selection[idx_to_add2] = True
+        self.selection[idx_to_remove] = False
+        self.selection_per_cluster[cluster].add(idx_to_add1)
+        self.selection_per_cluster[cluster].add(idx_to_add2)
+        self.selection_per_cluster[cluster].remove(idx_to_remove)
+        self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add1)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add2)
+        # Update intra cluster distances (add_within_cluster)
+        for idx, new_closest_point, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = new_closest_point
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, cur_closest_pair, dist in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
+                self.closest_points_inter_array[(other_cluster, cluster)] = cur_closest_pair[1]
+                self.closest_points_inter_array[(cluster, other_cluster)] = cur_closest_pair[0]
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+                self.closest_points_inter_array[(cluster, other_cluster)] = cur_closest_pair[1]
+                self.closest_points_inter_array[(other_cluster, cluster)] = cur_closest_pair[0]
+        # Update objective value
+        self.objective = candidate_objective
+
     def evaluate_remove(self, idx_to_remove, local_search=False):
         """
         Evaluates whether the proposed removal improves the current solution.
@@ -653,6 +798,49 @@ class Solution:
                 self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
             else:
                 self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+        # Update objective value
+        self.objective = candidate_objective
+
+    def accept_remove_exp(self, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+        """
+        Accepts the removal of a point from the solution.
+        Note that this assumes that the initial solution
+        and resulting solution are feasible.
+        -----------------------------------------------------
+        PARAMETERS:
+        idx_to_remove: int
+            The index of the point to be removed.
+        candidate_objective: float
+            The objective value of the solution after the removal.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the removed point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
+            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+        """
+        cluster = self.clusters[idx_to_remove]
+        # Update selected points
+        self.selection[idx_to_remove] = False
+        self.selection_per_cluster[cluster].remove(idx_to_remove)
+        self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        # Update intra cluster distances (add_within_cluster)
+        for idx, new_closest_point, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = new_closest_point
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, cur_closest_pair, dist in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = dist
+            self.closest_distances_inter[other_cluster, cluster] = dist
+            if other_cluster < cluster:
+                self.closest_points_inter[(other_cluster, cluster)] = cur_closest_pair
+                self.closest_points_inter_array[(other_cluster, cluster)] = cur_closest_pair[1]
+                self.closest_points_inter_array[(cluster, other_cluster)] = cur_closest_pair[0]
+            else:
+                self.closest_points_inter[(cluster, other_cluster)] = cur_closest_pair
+                self.closest_points_inter_array[(cluster, other_cluster)] = cur_closest_pair[1]
+                self.closest_points_inter_array[(other_cluster, cluster)] = cur_closest_pair[0]
         # Update objective value
         self.objective = candidate_objective
 
@@ -772,7 +960,8 @@ class Solution:
                 if move_type == "add":
                     idx_to_add = move_content
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
-                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                        #print("add", idx_to_add)
                         self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
                         solution_changed = True
                         #objectives.append((self.objective, f"added {idx_to_add} from cluster {self.clusters[idx_to_add]}"))
@@ -781,7 +970,8 @@ class Solution:
                 elif move_type == "swap":
                     idx_to_add, idx_to_remove = move_content
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
-                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                        #print("swap", (idx_to_add, idx_to_remove))
                         self.accept_swap(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
                         solution_changed = True
                         #objectives.append((self.objective, f"swapped {idx_to_remove} for {idx_to_add} in cluster {self.clusters[idx_to_add]}"))
@@ -790,7 +980,8 @@ class Solution:
                 elif move_type == "doubleswap":
                     (idx_to_add1, idx_to_add2), idx_to_remove = move_content
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove)
-                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                        #print("doubleswap", ((idx_to_add1, idx_to_add2), idx_to_remove))
                         self.accept_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
                         solution_changed = True
                         #objectives.append((self.objective, f"doubleswapped {idx_to_remove} for {idx_to_add1} and {idx_to_add2} in cluster {self.clusters[idx_to_add1]}"))
@@ -799,7 +990,8 @@ class Solution:
                 elif move_type == "remove":
                     idx_to_remove = move_content
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
-                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-8:
+                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                        #print("remove", idx_to_remove)
                         self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
                         solution_changed = True
                         #objectives.append((self.objective, f"removed {idx_to_remove} from cluster {self.clusters[idx_to_remove]}"))
@@ -1008,7 +1200,8 @@ class Solution:
             closest_distances_inter_shm.close()
             closest_distances_inter_shm.unlink()
 
-    def local_search_parallel_exp(self, max_iterations=1000, best_swap=False, num_cores=None, seed=1234, hybrid=False, batch_size=100, max_batches=10):
+    def local_search_parallel_exp(self, max_iterations=1000, num_cores=2, seed=1234, hybrid=False, 
+                                  batch_size=100, max_batches=10, runtime_switch=2, num_switch=2):
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot perform local search.")
         
@@ -1038,9 +1231,12 @@ class Solution:
             # Copy closest_distances_inter to shared memory
             closest_distances_inter_shm = shm.SharedMemory(create=True, size=self.closest_distances_inter.nbytes)
             shared_closest_distances_inter = np.ndarray(self.closest_distances_inter.shape, dtype=self.closest_distances_inter.dtype, buffer=closest_distances_inter_shm.buf)
+            # Copy closest_points_inter to shared memory
+            closest_points_inter_shm = shm.SharedMemory(create=True, size=self.closest_points_inter_array.nbytes)
+            shared_closest_points_inter = np.ndarray(self.closest_points_inter_array.shape, dtype=self.closest_points_inter_array.dtype, buffer=closest_points_inter_shm.buf)
             
-            RUNTIME_SWITCH = 2 # seconds after which we switch to multiprocessing
-            NUM_SWITCH = 2 # number of times runtime has to exceed RUNTIME_SWITCH before we switch to multiprocessing
+            RUNTIME_SWITCH = runtime_switch # seconds after which we switch to multiprocessing
+            NUM_SWITCH = num_switch # number of times runtime has to exceed RUNTIME_SWITCH before we switch to multiprocessing
 
             # In hybrid mode we switch to multiprocessing once an iteration takes longer than 1 minute since there is no speed-up otherwise.
             if hybrid:
@@ -1070,6 +1266,7 @@ class Solution:
                     
                     # Construct outer while loop that iterates until local optimum is found, or max_iterations is reached
                     while iteration < max_iterations:
+                        print(self.objective, flush=True)
                         solution_changed = False
                         # This allows for hybrid execution where fast iterations are done sequentially
                         if times_exceeded > NUM_SWITCH: # if enough runs took long enough, switch to multiprocessing
@@ -1107,16 +1304,18 @@ class Solution:
                                 # Process current collection of batches in parallel
                                 if len(batches) > 0: #if there are tasks to process
                                     batch_results = []
+                                    batch_time = time.time()
                                     for b in batches:
                                         if event.is_set():
                                             break
                                         res = pool.apply_async(
                                             process_batch,
                                             args=(b, event, self.closest_points_inter, self.selection_per_cluster, self.nonselection_per_cluster, self.objective),
+                                            #args=(b, event, None, self.selection_per_cluster, self.nonselection_per_cluster, self.objective),
                                             callback = lambda result: process_batch_result(result, results)
                                         )
                                         batch_results.append(res)
-                                    
+                                    print("Batch submission time:", time.time() - batch_time, "seconds", flush=True)
                                     for result in batch_results:
                                         result.wait()
 
@@ -1224,6 +1423,237 @@ class Solution:
 
             closest_distances_inter_shm.close()
             closest_distances_inter_shm.unlink()
+
+            closest_points_inter_shm.close()
+            closest_points_inter_shm.unlink()
+
+    def local_search_parallel_exp2(self, max_iterations=1000, num_cores=2, seed=1234, hybrid=False, 
+                                  batch_size=100, max_batches=10, runtime_switch=2, num_switch=2):
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot perform local search.")
+        
+        iteration = 0
+        objectives = [(self.objective, "start")]
+        time_per_iteration = []
+        switch_iteration = -1
+        solution_changed = False
+
+        try:
+            # Copy distance matrix to shared memory
+            distances_shm = shm.SharedMemory(create=True, size=self.distances.nbytes)
+            shared_distances = np.ndarray(self.distances.shape, dtype=self.distances.dtype, buffer=distances_shm.buf)
+            np.copyto(shared_distances, self.distances)
+            # Copy cluster assignment to shared memory
+            clusters_shm = shm.SharedMemory(create=True, size=self.clusters.nbytes)
+            shared_clusters = np.ndarray(self.clusters.shape, dtype=self.clusters.dtype, buffer=clusters_shm.buf)
+            np.copyto(shared_clusters, self.clusters)
+            # INTRA
+            # Copy closest_distances_intra to shared memory
+            closest_distances_intra_shm = shm.SharedMemory(create=True, size=self.closest_distances_intra.nbytes)
+            shared_closest_distances_intra = np.ndarray(self.closest_distances_intra.shape, dtype=self.closest_distances_intra.dtype, buffer=closest_distances_intra_shm.buf)
+            # Copy closest_points_intra to shared memory
+            closest_points_intra_shm = shm.SharedMemory(create=True, size=self.closest_points_intra.nbytes)
+            shared_closest_points_intra = np.ndarray(self.closest_points_intra.shape, dtype=self.closest_points_intra.dtype, buffer=closest_points_intra_shm.buf)
+            # INTER
+            # Copy closest_distances_inter to shared memory
+            closest_distances_inter_shm = shm.SharedMemory(create=True, size=self.closest_distances_inter.nbytes)
+            shared_closest_distances_inter = np.ndarray(self.closest_distances_inter.shape, dtype=self.closest_distances_inter.dtype, buffer=closest_distances_inter_shm.buf)
+            # Copy closest_points_inter to shared memory
+            closest_points_inter_shm = shm.SharedMemory(create=True, size=self.closest_points_inter_array.nbytes)
+            shared_closest_points_inter = np.ndarray(self.closest_points_inter_array.shape, dtype=self.closest_points_inter_array.dtype, buffer=closest_points_inter_shm.buf)
+            
+            RUNTIME_SWITCH = runtime_switch # seconds after which we switch to multiprocessing
+            NUM_SWITCH = num_switch # number of times runtime has to exceed RUNTIME_SWITCH before we switch to multiprocessing
+
+            # In hybrid mode we switch to multiprocessing once an iteration takes longer than 1 minute since there is no speed-up otherwise.
+            if hybrid:
+                last_run_time = 0
+                times_exceeded = 0
+            else:
+                last_run_time = np.inf
+                times_exceeded = np.inf
+            
+
+            total_time = time.time()
+            with Manager() as manager:
+                event = manager.Event() #this is used to signal when tasks should be stopped
+                results = manager.list() #this is used to store an improvement if it exists
+
+                with Pool(
+                    processes=num_cores,
+                    initializer=init_worker_exp,
+                    initargs=(
+                        distances_shm.name, shared_distances.shape,
+                        clusters_shm.name, shared_clusters.shape,
+                        closest_distances_intra_shm.name, shared_closest_distances_intra.shape,
+                        closest_points_intra_shm.name, shared_closest_points_intra.shape,
+                        closest_distances_inter_shm.name, shared_closest_distances_inter.shape,
+                        closest_points_inter_shm.name, shared_closest_points_inter.shape,
+                        self.unique_clusters, self.selection_cost, self.num_points),
+                    ) as pool:
+                    
+                    # Construct outer while loop that iterates until local optimum is found, or max_iterations is reached
+                    while iteration < max_iterations:
+                        solution_changed = False
+                        # This allows for hybrid execution where fast iterations are done sequentially
+                        if times_exceeded > NUM_SWITCH: # if enough runs took long enough, switch to multiprocessing
+                            # Update closest distances and points in shared memory
+                            np.copyto(shared_closest_distances_intra, self.closest_distances_intra)
+                            np.copyto(shared_closest_points_intra, self.closest_points_intra)
+                            np.copyto(shared_closest_distances_inter, self.closest_distances_inter)
+                            np.copyto(shared_closest_points_inter, self.closest_points_inter_array)
+
+                            total_improves = 0
+                            total_moves = 0
+
+                            # Set up for current iteration
+                            move_generator = self.generate_random_moves(seed=seed)
+                            event.clear() #unset event
+                            results = [] #reset results for this iteration
+
+                            cur_iteration_time = time.time()
+                            # This loop makes batches of batches of moves each to be processed in parallel.
+                            while True:
+                                batches = [] #list of batches
+                                for _ in range(max_batches): #fill the list with up to max_batches batches
+                                    batch = [] #batch of moves
+                                    try:
+                                        for _ in range(batch_size):
+                                            move_type, move_content = next(move_generator)
+                                            batch.append((move_type, move_content))
+                                    except StopIteration: #if no more moves available, break
+                                        if len(batch) > 0:
+                                            batches.append(batch)
+                                        break
+                                    if len(batch) > 0:
+                                        batches.append(batch)
+                                # At this point batches is a list with a list of moves for every entry
+
+                                # Process current collection of batches in parallel
+                                if len(batches) > 0: #if there are tasks to process
+                                    batch_results = []
+                                    #batch_time = time.time()
+                                    for b in batches:
+                                        if event.is_set():
+                                            break
+                                        res = pool.apply_async(
+                                            process_batch_exp,
+                                            args=(b, event, self.selection_per_cluster, self.nonselection_per_cluster, self.objective),
+                                            #args=(b, event, None, self.selection_per_cluster, self.nonselection_per_cluster, self.objective),
+                                            callback = lambda result: process_batch_result(result, results)
+                                        )
+                                        batch_results.append(res)
+                                    #print("Batch submission time:", time.time() - batch_time, "seconds", flush=True)
+                                    for result in batch_results:
+                                        result.wait()
+
+                                    if len(results) > 0:
+                                        solution_changed = True
+                                        break
+                                else: #no more tasks to process
+                                    break
+                            time_per_iteration.append(time.time() - cur_iteration_time)
+                            if solution_changed: # if solution changed, update solution
+                                move_type = results[0][0]
+                                move_content = results[0][1]
+                                candidate_objective = results[0][2]
+                                add_within_cluster = results[0][3]
+                                add_for_other_clusters = results[0][4]
+                                if move_type == "add":
+                                    self.accept_add_exp(move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                elif move_type == "swap":
+                                    idx_to_add, idx_to_remove = move_content
+                                    self.accept_swap_exp(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                elif move_type == "doubleswap":
+                                    (idx_to_add1, idx_to_add2), idx_to_remove = move_content
+                                    self.accept_doubleswap_exp((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                elif move_type == "remove": 
+                                    idx_to_remove = move_content
+                                    self.accept_remove_exp(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                #print(len(results), results[0][0], results[0][1], results[0][2], flush=True)
+                                iteration += 1
+                                if iteration % 50 == 0:
+                                    print(f"Iteration {iteration}: Objective = {self.objective}", flush=True)
+                            else: #stop when local optimum is found
+                                break
+                        else:
+                            last_run_time = 0
+                            start = time.time()
+                            for move_type, move_content in self.generate_random_moves(seed=seed):
+                                if move_type == "add":
+                                    idx_to_add = move_content
+                                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
+                                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                                        solution_changed=True
+                                        break
+                                elif move_type == "swap":
+                                    idx_to_add, idx_to_remove = move_content
+                                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                                        solution_changed=True
+                                        break
+                                elif move_type == "doubleswap":
+                                    (idx_to_add1, idx_to_add2), idx_to_remove = move_content
+                                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap((idx_to_add1, idx_to_add2), idx_to_remove)
+                                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                                        solution_changed=True
+                                        break
+                                elif move_type == "remove":
+                                    idx_to_remove = move_content
+                                    candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
+                                    if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-5:
+                                        solution_changed=True
+                                        break
+                            if hybrid:
+                                last_run_time = time.time() - start
+                                time_per_iteration.append(last_run_time)
+                                if last_run_time > RUNTIME_SWITCH:
+                                    times_exceeded += 1
+                                if times_exceeded > NUM_SWITCH:
+                                    print(f"Switching to multiprocessing after {iteration} iterations", flush=True)
+                                    switch_iteration = iteration
+                            if solution_changed:
+                                if move_type == "add":
+                                    self.accept_add_exp(move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                elif move_type == "swap":
+                                    idx_to_add, idx_to_remove = move_content
+                                    self.accept_swap_exp(idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                elif move_type == "doubleswap":
+                                    (idx_to_add1, idx_to_add2), idx_to_remove = move_content
+                                    self.accept_doubleswap_exp((idx_to_add1, idx_to_add2), idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                elif move_type == "remove": 
+                                    idx_to_remove = move_content
+                                    self.accept_remove_exp(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                                #print(move_type, move_content, candidate_objective, flush=True)
+                                iteration += 1
+                                if iteration % 50 == 0:
+                                    print(f"Iteration {iteration}: Objective = {self.objective}", flush=True)
+                            else:
+                                break
+            #print(time.time() - total_time)
+            #print(time_per_iteration)
+            return time_per_iteration, switch_iteration
+        except Exception as e:
+            print(f"An error occurred during local search: {e}", flush=True)
+            raise e
+        finally:
+            distances_shm.close()
+            distances_shm.unlink()
+
+            clusters_shm.close()
+            clusters_shm.unlink()
+
+            closest_distances_intra_shm.close()
+            closest_distances_intra_shm.unlink()
+
+            closest_points_intra_shm.close()
+            closest_points_intra_shm.unlink()
+
+            closest_distances_inter_shm.close()
+            closest_distances_inter_shm.unlink()
+
+            closest_points_inter_shm.close()
+            closest_points_inter_shm.unlink()
 
     def simulated_annealing(self, max_iterations=1000, initial_temperature=1.0, cooling_rate=0.99):
         """
@@ -1604,6 +2034,89 @@ def evaluate_swap_mp(
     else:
         return -1, -1, -1  # -1, -1, -1 to signify no improvement
 
+def evaluate_swap_mp_exp(
+        idxs_to_add, idx_to_remove, objective,
+        selection_per_cluster, nonselection):
+    """
+    Evaluates the effect of swapping a point for a (set of) point(s) in the solution 
+    without relying on an explicit instance of the Solution class.
+    NOTE: This function is designed to be used with shared memory for parallel processing!
+    NOTE: In the current implementation, there is no check for feasibility, so it is assumed
+            that the point can be added without violating any constraints!
+    """
+    try:
+        num_to_add = len(idxs_to_add)
+    except TypeError:
+        num_to_add = 1
+        idxs_to_add = [idxs_to_add]
+    candidate_objective = objective + (num_to_add - 1) * _selection_cost # cost for adding and removing
+    cluster = _clusters[idx_to_remove]
+    # Generate pool of alternative points to compare to
+    new_selection = set(selection_per_cluster[cluster])
+    for idx in idxs_to_add:
+        new_selection.add(idx)
+    new_selection.remove(idx_to_remove)
+    new_nonselection = set(nonselection)
+    new_nonselection.add(idx_to_remove)
+
+    # Calculate intra cluster distances for cluster of new point
+    add_within_cluster = []
+    for idx in new_nonselection:
+        cur_closest_distance = _closest_distances_intra[idx]
+        cur_closest_point = _closest_points_intra[idx]
+        if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
+            cur_closest_distance = np.inf
+            for other_idx in new_selection:
+                cur_dist = get_distance(idx, other_idx, _distances, _num_points)
+                if cur_dist < cur_closest_distance:
+                    cur_closest_distance = cur_dist
+                    cur_closest_point = other_idx
+            candidate_objective += cur_closest_distance - _closest_distances_intra[idx]
+            add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
+        else: #point to be removed is not closest, check if newly added point is closer
+            cur_dists = [(get_distance(idx, idx_to_add, _distances, _num_points), idx_to_add) for idx_to_add in idxs_to_add]
+            cur_dist, idx_to_add = min(cur_dists, key = lambda x: x[0])
+            if cur_dist < cur_closest_distance:
+                candidate_objective += cur_dist - cur_closest_distance
+                add_within_cluster.append((idx, idx_to_add, cur_dist))
+    # Calculate intra cluster distances for all other clusters
+    add_for_other_clusters = []
+    for other_cluster in _unique_clusters:
+        if other_cluster != cluster:
+            cur_closest_similarity = _closest_distances_inter[cluster, other_cluster]
+            cur_closest_point = _closest_points_inter[other_cluster, cluster]
+            cur_closest_pair = (-1, -1)
+            if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
+                cur_closest_similarity = -np.inf
+                for idx in selection_per_cluster[other_cluster]:
+                    for other_idx in new_selection:
+                        cur_similarity = 1.0 - get_distance(idx, other_idx, _distances, _num_points)
+                        if cur_similarity > cur_closest_similarity:
+                            cur_closest_similarity = cur_similarity
+                            if other_cluster < cluster:
+                                cur_closest_pair = (idx, other_idx)
+                            else:
+                                cur_closest_pair = (other_idx, idx)
+                candidate_objective += cur_closest_similarity - _closest_distances_inter[cluster, other_cluster]
+                add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
+            else: #point to be removed is not closest, check if one of newly added points is closer
+                for idx in selection_per_cluster[other_cluster]:
+                    cur_similarities = [(1.0 - get_distance(idx, idx_to_add, _distances, _num_points), idx_to_add) for idx_to_add in idxs_to_add]
+                    cur_similarity, idx_to_add = max(cur_similarities, key = lambda x: x[0])
+                    if cur_similarity > cur_closest_similarity:
+                        cur_closest_similarity = cur_similarity
+                        if other_cluster < cluster:
+                            cur_closest_pair = (idx, idx_to_add)
+                        else:
+                            cur_closest_pair = (idx_to_add, idx)
+                if cur_closest_pair[0] > -1:
+                    candidate_objective += cur_closest_similarity - _closest_distances_inter[cluster, other_cluster]
+                    add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
+    if candidate_objective < objective and np.abs(candidate_objective - objective) > 1e-5:
+        return candidate_objective, add_within_cluster, add_for_other_clusters
+    else:
+        return -1, -1, -1  # -1, -1, -1 to signify no improvement
+
 def evaluate_remove_mp(
         idx_to_remove, objective,
         selection_per_cluster, nonselection,
@@ -1634,6 +2147,70 @@ def evaluate_remove_mp(
                 cur_closest_point = closest_points_inter[other_cluster, cluster][1]
             else:
                 cur_closest_point = closest_points_inter[cluster, other_cluster][0]
+            cur_closest_pair = (-1, -1)
+            if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
+                cur_closest_similarity = -np.inf
+                for idx in selection_per_cluster[other_cluster]:
+                    for other_idx in new_selection:
+                        cur_similarity = 1.0 - get_distance(idx, other_idx, _distances, _num_points)
+                        if cur_similarity > cur_closest_similarity:
+                            cur_closest_similarity = cur_similarity
+                            if other_cluster < cluster:
+                                cur_closest_pair = (idx, other_idx)
+                            else:
+                                cur_closest_pair = (other_idx, idx)
+                candidate_objective += cur_closest_similarity - _closest_distances_inter[cluster, other_cluster]
+                add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
+    
+    if candidate_objective > objective:
+        return -1, -1, -1
+    
+    # Calculate intra cluster distances for cluster of removed point
+    add_within_cluster = [] #this stores changes that have to be made if the objective improves
+    for idx in new_nonselection:
+        cur_closest_distance = _closest_distances_intra[idx]
+        cur_closest_point = _closest_points_intra[idx]
+        if cur_closest_point == idx_to_remove:
+            cur_closest_distance = np.inf
+            for other_idx in new_selection:
+                cur_dist = get_distance(idx, other_idx, _distances, _num_points)
+                if cur_dist < cur_closest_distance:
+                    cur_closest_distance = cur_dist
+                    cur_closest_point = other_idx
+            candidate_objective += cur_closest_distance - _closest_distances_intra[idx]
+            add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
+
+    if candidate_objective < objective and np.abs(candidate_objective - objective) > 1e-5:
+        return candidate_objective, add_within_cluster, add_for_other_clusters
+    else:
+        return -1, -1, -1
+
+def evaluate_remove_mp_exp(
+        idx_to_remove, objective,
+        selection_per_cluster, nonselection):
+    """
+    Evaluates the effect of removing a point from the solution without relying on an explicit instance
+    of the Solution class.
+    NOTE: This function is designed to be used with shared memory for parallel processing!
+    NOTE: In the current implementation, there is no check for feasibility, so it is assumed
+            that the point can be added without violating any constraints!
+    """
+    candidate_objective = objective - _selection_cost # cost for removing the point
+    cluster = _clusters[idx_to_remove]
+    # Generate pool of alternative points to compare to
+    new_selection = set(selection_per_cluster[cluster])
+    new_selection.remove(idx_to_remove)
+    new_nonselection = set(nonselection)
+    new_nonselection.add(idx_to_remove)
+    # Unlike other evaluate functions, we start by checking the inter-cluster distances first since
+    # removing a point can only decrease the inter-cluster cost.
+
+    # Calculate inter cluster distances for all other clusters
+    add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
+    for other_cluster in _unique_clusters:
+        if other_cluster != cluster:
+            cur_closest_similarity = _closest_distances_inter[cluster, other_cluster]
+            cur_closest_point = _closest_points_inter[other_cluster, cluster]
             cur_closest_pair = (-1, -1)
             if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
                 cur_closest_similarity = -np.inf
@@ -1967,6 +2544,55 @@ def init_worker(
 
     atexit.register(cleanup)
 
+def init_worker_exp(
+        distances_name, distances_shape, 
+        clusters_name, clusters_shape,
+        closest_distances_intra_name, closest_distances_intra_shape, 
+        closest_points_intra_name, closest_points_intra_shape,
+        closest_distances_inter_name, closest_distances_inter_shape,
+        closest_points_inter_name, closest_points_inter_shape,
+        unique_clusters, selection_cost, num_points):
+    
+    import numpy as np
+    import multiprocessing.shared_memory as shm
+    import atexit
+
+    global _distances_shm, _distances
+    _distances_shm = shm.SharedMemory(name=distances_name)
+    _distances = np.ndarray(distances_shape, dtype=np.float32, buffer=_distances_shm.buf)
+    global _clusters_shm, _clusters
+    _clusters_shm = shm.SharedMemory(name=clusters_name)
+    _clusters = np.ndarray(clusters_shape, dtype=np.int64, buffer=_clusters_shm.buf)
+    global _closest_distances_intra_shm, _closest_distances_intra
+    _closest_distances_intra_shm = shm.SharedMemory(name=closest_distances_intra_name)
+    _closest_distances_intra = np.ndarray(closest_distances_intra_shape, dtype=np.float32, buffer=_closest_distances_intra_shm.buf)
+    global _closest_points_intra_shm, _closest_points_intra
+    _closest_points_intra_shm = shm.SharedMemory(name=closest_points_intra_name)
+    _closest_points_intra = np.ndarray(closest_points_intra_shape, dtype=np.int32, buffer=_closest_points_intra_shm.buf)
+    global _closest_distances_inter_shm, _closest_distances_inter
+    _closest_distances_inter_shm = shm.SharedMemory(name=closest_distances_inter_name)
+    _closest_distances_inter = np.ndarray(closest_distances_inter_shape, dtype=np.float32, buffer=_closest_distances_inter_shm.buf)
+    global _closest_points_inter_shm, _closest_points_inter
+    _closest_points_inter_shm = shm.SharedMemory(name=closest_points_inter_name)
+    _closest_points_inter = np.ndarray(closest_points_inter_shape, dtype=np.int32, buffer=_closest_points_inter_shm.buf)
+    global _unique_clusters, _selection_cost, _num_points
+    _unique_clusters = unique_clusters
+    _selection_cost = selection_cost
+    _num_points = num_points
+
+    def cleanup():
+        try:
+            _distances_shm.close()
+            _clusters_shm.close()
+            _closest_distances_intra_shm.close()
+            _closest_points_intra_shm.close()
+            _closest_distances_inter_shm.close()
+            _closest_points_inter_shm.close()
+        except Exception as e:
+            print(f"Error closing shared memory: {e}")
+
+    atexit.register(cleanup)
+
 def process_batch(batch, event, closest_points_inter, selection_per_cluster, nonselection_per_cluster, objective):
     global _distances, _clusters, _closest_distances_intra, _closest_points_intra, _closest_distances_inter
     global _unique_clusters, _selection_cost, _num_points
@@ -1998,6 +2624,45 @@ def process_batch(batch, event, closest_points_inter, selection_per_cluster, non
             idx_to_remove = content
             cluster = _clusters[idx_to_remove]
             candidate_objective, add_within_cluster, add_for_other_clusters = evaluate_remove_mp(idx_to_remove, objective, selection_per_cluster, nonselection_per_cluster[cluster], closest_points_inter)
+            num_moves += 1
+            if candidate_objective > -1:
+                num_improvements += 1
+                event.set()
+                return "remove", content, candidate_objective, add_within_cluster, add_for_other_clusters
+
+    return None, None, -1, None, None
+
+def process_batch_exp(batch, event, selection_per_cluster, nonselection_per_cluster, objective):
+    global _distances, _clusters, _closest_distances_intra, _closest_points_intra, _closest_distances_inter, _closest_points_inter
+    global _unique_clusters, _selection_cost, _num_points
+
+    num_improvements = 0
+    num_moves = 0
+    for task, content in batch:
+        if event.is_set():
+            return None, None, -1, None, None
+        if task == "add":
+            idx_to_add = content
+            cluster = _clusters[idx_to_add]
+            candidate_objective, add_within_cluster, add_for_other_clusters = evaluate_add_mp(idx_to_add, objective, selection_per_cluster, nonselection_per_cluster[cluster])
+            num_moves += 1
+            if candidate_objective > -1:
+                num_improvements += 0
+                event.set()
+                return "add", content, candidate_objective, add_within_cluster, add_for_other_clusters
+        elif task == "swap" or task == "doubleswap":
+            idxs_to_add, idx_to_remove = content
+            cluster = _clusters[idx_to_remove]
+            candidate_objective, add_within_cluster, add_for_other_clusters = evaluate_swap_mp_exp(idxs_to_add, idx_to_remove, objective, selection_per_cluster, nonselection_per_cluster[cluster])
+            num_moves += 1
+            if candidate_objective > -1:
+                num_improvements += 1
+                event.set()
+                return task, content, candidate_objective, add_within_cluster, add_for_other_clusters
+        elif task == "remove":
+            idx_to_remove = content
+            cluster = _clusters[idx_to_remove]
+            candidate_objective, add_within_cluster, add_for_other_clusters = evaluate_remove_mp_exp(idx_to_remove, objective, selection_per_cluster, nonselection_per_cluster[cluster])
             num_moves += 1
             if candidate_objective > -1:
                 num_improvements += 1
