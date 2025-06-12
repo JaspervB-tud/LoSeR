@@ -816,7 +816,7 @@ class Solution:
 
         return objectives, selections
 
-    def local_search_random(self, max_iterations=1000, seed=None):
+    def local_search_random(self, max_iterations=1000, random_move_order=True, random_index_order=True):
         """
         Perform a local search to find a (local) optimal solution.
         NOTE: This version picks a random move to make rather than structurally exhausting all options.
@@ -834,15 +834,12 @@ class Solution:
         selections = [self.selection.copy()]
         time_per_iteration = []
 
-        if type(seed) is int:
-            np.random.seed(seed)
-
         solution_changed = False
         while iteration < max_iterations:
             solution_changed = False
             cur_time = time.time()
             #for move_type, move_content in self.generate_random_moves():
-            for move_type, move_content in self.generate_moves(random_move_order=True, random_index_order=True):
+            for move_type, move_content in self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order):
                 if move_type == "add":
                     idx_to_add = move_content
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
@@ -976,8 +973,8 @@ class Solution:
 
         return objectives, selections
 
-    def local_search_parallel(self, max_iterations=1000, num_cores=2, seed=1234, hybrid=False, 
-                                  batch_size=100, max_batches=10, runtime_switch=2, num_switch=2):
+    def local_search_parallel(self, max_iterations=1000, num_cores=2, random_move_order=True, random_index_order=True, hybrid=False, 
+                                  batch_size=100, max_batches=10, runtime_switch=1.0, num_switch=5):
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot perform local search.")
         
@@ -1051,7 +1048,7 @@ class Solution:
 
                             # Set up for current iteration
                             #move_generator = self.generate_random_moves() 
-                            move_generator = self.generate_moves(random_move_order=True, random_index_order=True)
+                            move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order)
                             event.clear() #unset event
                             results = [] #reset results for this iteration
 
@@ -1113,7 +1110,7 @@ class Solution:
                             last_run_time = 0
                             start = time.time()
                             #for move_type, move_content in self.generate_random_moves():
-                            for move_type, move_content in self.generate_moves(random_move_order=True, random_index_order=True):
+                            for move_type, move_content in self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order):
                                 if move_type == "add":
                                     idx_to_add = move_content
                                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
@@ -1143,7 +1140,9 @@ class Solution:
                                 time_per_iteration.append(last_run_time)
                                 if last_run_time > RUNTIME_SWITCH:
                                     times_exceeded += 1
-                                if times_exceeded > NUM_SWITCH:
+                                else: # reset if last run was fast enough
+                                    times_exceeded = 0
+                                if times_exceeded > NUM_SWITCH: # if enough consecutive runs took long enough, switch to multiprocessing
                                     print(f"Switching to multiprocessing after {iteration} iterations", flush=True)
                                     switch_iteration = iteration
                             if solution_changed:
