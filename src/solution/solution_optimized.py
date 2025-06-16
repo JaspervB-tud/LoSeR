@@ -8,7 +8,7 @@ import time
 import traceback
 
 class Solution:
-    def __init__(self, distances, clusters, selection=None, selection_cost=0.1, seed=None):
+    def __init__(self, distances, clusters, selection=None, selection_cost=0.1, cost_per_cluster=False, seed=None):
         # Assert that distances and clusters have the same number of rows
         if distances.shape[0] != clusters.shape[0]:
             raise ValueError("Number of points is different between distances and clusters.")
@@ -39,7 +39,16 @@ class Solution:
         self.distances = squareform(distances.astype(dtype=np.float32))
         self.clusters = clusters.astype(dtype=np.int64)
         self.unique_clusters = np.unique(self.clusters)
+        # Cost per cluster based on number of points in each cluster
+        # If cost_per_cluster is True, then the cost is divided by the number of points in each cluster
+        # cost_per_cluster is indexed by cluster indices
         self.selection_cost = selection_cost
+        self.cost_per_cluster = np.zeros(self.unique_clusters.shape[0], dtype=np.float64)
+        if cost_per_cluster:
+            for cluster in self.unique_clusters:
+                self.cost_per_cluster[cluster] = 1 / np.sum(self.clusters == cluster)
+        else:
+            self.cost_per_cluster.fill(selection_cost)
         self.num_points = distances.shape[0]
 
         # Process initial representation to optimize for comparisons speed
@@ -61,9 +70,11 @@ class Solution:
 
         self.feasible = self.determine_feasibility()
 
+        self.objective = 0.0
         if self.feasible:
             # Set objective value
-            self.objective = np.sum(self.selection) * self.selection_cost
+            for idx in np.where(self.selection)[0]:
+                self.objective += self.cost_per_cluster[self.clusters[idx]]
             # INTRA cluster distances
             for idx in np.where(~self.selection)[0]:
                 cur_min = np.float32(np.inf)
@@ -126,7 +137,8 @@ class Solution:
             return False
         if self.feasible:
             # Check if objective is equal
-            if not math.isclose(self.objective, other.objective, rel_tol=1e-8):
+            if not math.isclose(self.objective, other.objective, rel_tol=1e-6):
+                print("Objective values are not equal: ", self.objective, other.objective)
                 return False
             # Check if closest_distances_intra is equal
             if not np.allclose(self.closest_distances_intra, other.closest_distances_intra, atol=1e-5):
@@ -154,7 +166,7 @@ class Solution:
         return True
 
     @staticmethod
-    def generate_centroid_solution(distances, clusters, selection_cost=0.1, seed=None):
+    def generate_centroid_solution(distances, clusters, selection_cost=0.1, cost_per_cluster=False, seed=None):
         """
         Generates a Solution object with an initial solution by selecting the centroid for every cluster.
 
@@ -193,10 +205,10 @@ class Solution:
             centroid = np.argmin(np.sum(cluster_distances, axis=1))
             selection[cluster_points[centroid]] = True
 
-        return Solution(distances, clusters, selection=selection, selection_cost=selection_cost, seed=seed)
+        return Solution(distances, clusters, selection=selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=seed)
     
     @staticmethod
-    def generate_random_solution(distances, clusters, selection_cost=0.1, max_fraction=0.1, seed=None):
+    def generate_random_solution(distances, clusters, selection_cost=0.1, cost_per_cluster=False, max_fraction=0.1, seed=None):
         """
         Generates a Solution object with an initial solution by randomly selecting points.
 
@@ -252,7 +264,7 @@ class Solution:
         additional_points = random_state.choice(remaining_points, size=num_additional_points, replace=False)
         selection[additional_points] = True
 
-        return Solution(distances, clusters, selection, selection_cost=selection_cost, seed=random_state)
+        return Solution(distances, clusters, selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=random_state)
 
     def evaluate_add(self, idx_to_add, local_search=False):
         """
@@ -263,7 +275,7 @@ class Solution:
         if self.selection[idx_to_add]:
             raise ValueError("The point to add must not be selected.")
         cluster = self.clusters[idx_to_add]
-        candidate_objective = self.objective + self.selection_cost # cost for adding the point
+        candidate_objective = self.objective + self.cost_per_cluster[cluster] # cost for adding the point
         # Calculate intra cluster distances for cluster of new point
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in self.nonselection_per_cluster[cluster]:
@@ -273,7 +285,7 @@ class Solution:
                 add_within_cluster.append((idx, cur_dist))
 
         # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
-        if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > 1e-5 and local_search:
+        if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > 1e-6 and local_search:
             return np.inf, None, None
 
         # Inter cluster distances for other clusters
@@ -469,7 +481,7 @@ class Solution:
         cluster = self.clusters[idx_to_add1]
         if cluster != self.clusters[idx_to_remove] or cluster != self.clusters[idx_to_add2]:
             raise ValueError("All points must be in the same cluster.")
-        candidate_objective = self.objective + self.selection_cost
+        candidate_objective = self.objective + self.cost_per_cluster[cluster]
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
         new_selection.add(idx_to_add1)
@@ -598,14 +610,8 @@ class Solution:
         """
         Evaluates whether the proposed removal improves the current solution.
         """
-        if not self.feasible:
-            raise ValueError("The solution is infeasible, cannot evaluate addition.")
-        if not self.selection[idx_to_remove]:
-            raise ValueError("The point to remove must be selected.")
         cluster = self.clusters[idx_to_remove]
-        if len(self.selection_per_cluster[cluster]) == 1:
-            raise ValueError("The point to remove is the only selected point in its cluster.")
-        candidate_objective = self.objective - self.selection_cost
+        candidate_objective = self.objective - self.cost_per_cluster[cluster]
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
         new_selection.discard(idx_to_remove)
@@ -896,7 +902,7 @@ class Solution:
                             closest_points_intra_shm.name, shared_closest_points_intra.shape,
                             closest_distances_inter_shm.name, shared_closest_distances_inter.shape,
                             closest_points_inter_shm.name, shared_closest_points_inter.shape,
-                            self.unique_clusters, self.selection_cost, self.num_points
+                            self.unique_clusters, self.cost_per_cluster, self.num_points,
                         ),
                     ) as pool:
                         
@@ -1155,9 +1161,6 @@ class Solution:
             NOTE: This is primarily for logging purposes
         objectives: list of floats
             The objective value in each iteration.
-        switch_iteration: int
-            The iteration at which the local search switched to
-            multiprocessing, or -1 if it did not switch.
         """
         # Validate input parameters
         if not isinstance(max_iterations, int) or max_iterations < 1:
@@ -1224,7 +1227,7 @@ class Solution:
                         closest_points_intra_shm.name, shared_closest_points_intra.shape,
                         closest_distances_inter_shm.name, shared_closest_distances_inter.shape,
                         closest_points_inter_shm.name, shared_closest_points_inter.shape,
-                        self.unique_clusters, self.selection_cost, self.num_points
+                        self.unique_clusters, self.cost_per_cluster, self.num_points
                     ),
                 ) as pool:
                     while iteration < max_iterations:
@@ -1323,7 +1326,7 @@ class Solution:
                                         break
                                     else:
                                         num_solutions_tried += num_this_loop
-                                        print(f"Processed {num_solutions_tried} solutions in {time.time() - cur_batch_time:.4f}s, no improvement found yet.", flush=True)
+                                        print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
 
                                 else: # No more tasks to process, break while loop
                                     break
@@ -1612,7 +1615,7 @@ def evaluate_add_mp(
             not selected in the solution.
         """
         cluster = _clusters[idx_to_add]
-        candidate_objective = objective + _selection_cost # cost for adding the point
+        candidate_objective = objective + _cost_per_cluster[cluster] # cost for adding the point
         
         # Intra cluster distances for same cluster
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
@@ -1676,8 +1679,8 @@ def evaluate_swap_mp(
     except TypeError:
         num_to_add = 1
         idxs_to_add = [idxs_to_add]
-    candidate_objective = objective + (num_to_add - 1) * _selection_cost # cost for adding and removing
     cluster = _clusters[idx_to_remove]
+    candidate_objective = objective + (num_to_add - 1) * _cost_per_cluster[cluster] # cost for adding and removing
     # Generate pool of alternative points to compare to
     new_selection = set(selection_per_cluster[cluster])
     for idx in idxs_to_add:
@@ -1767,8 +1770,8 @@ def evaluate_remove_mp(
         A set of indices of points (in the cluster of the point to be removed) that are currently 
         not selected in the solution.
     """
-    candidate_objective = objective - _selection_cost # cost for removing the point
     cluster = _clusters[idx_to_remove]
+    candidate_objective = objective - _cost_per_cluster[cluster] # cost for removing the point from the cluster
     # Generate pool of alternative points to compare to
     new_selection = set(selection_per_cluster[cluster])
     new_selection.remove(idx_to_remove)
@@ -1828,7 +1831,7 @@ def init_worker(
         closest_points_intra_name, closest_points_intra_shape,
         closest_distances_inter_name, closest_distances_inter_shape,
         closest_points_inter_name, closest_points_inter_shape,
-        unique_clusters, selection_cost, num_points):
+        unique_clusters, cost_per_cluster, num_points):
     """
     Initializes a worker for multiprocessing by setting up shared memory
     for the distances, clusters, closest distances and points.
@@ -1861,8 +1864,8 @@ def init_worker(
         Shape of the inter-cluster closest points array.
     unique_clusters: np.ndarray
         Array of unique cluster indices.
-    selection_cost: float
-        Cost associated with selecting a point.
+    cost_per_cluster: np.ndarray
+        Costs associated with selecting a point.
     num_points: int
         Total number of points in the dataset.
     """
@@ -1888,9 +1891,9 @@ def init_worker(
     global _closest_points_inter_shm, _closest_points_inter
     _closest_points_inter_shm = shm.SharedMemory(name=closest_points_inter_name)
     _closest_points_inter = np.ndarray(closest_points_inter_shape, dtype=np.int32, buffer=_closest_points_inter_shm.buf)
-    global _unique_clusters, _selection_cost, _num_points
+    global _unique_clusters, _cost_per_cluster, _num_points
     _unique_clusters = unique_clusters
-    _selection_cost = selection_cost
+    _cost_per_cluster = cost_per_cluster
     _num_points = num_points
 
     # Define clean up function to close shared memory

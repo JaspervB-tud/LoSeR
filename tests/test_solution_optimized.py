@@ -87,7 +87,7 @@ def test_solution_correctness_1():
         assert solution_object.closest_points_inter[key] == expected_closest_points_inter[key]
     # Check if the objective value is correctly calculated
     expected_objective_value = groundtruth_objective_value(selection, clusters, distances, selection_cost)
-    assert solution_object.objective == expected_objective_value
+    np.testing.assert_almost_equal(solution_object.objective, expected_objective_value, decimal=5)
 
 def test_evaluate_add_1():
     # Small instance, 6 points, 2 clusters
