@@ -7,6 +7,7 @@ from multiprocessing import Pool, Manager
 import time
 import traceback
 
+#TMP TEST
 class Solution:
     def __init__(self, distances, clusters, selection=None, selection_cost=0.1, cost_per_cluster=False, seed=None):
         # Assert that distances and clusters have the same number of rows
