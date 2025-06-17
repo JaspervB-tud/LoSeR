@@ -65,63 +65,9 @@ class Solution:
 
         # Process initial representation to optimize for comparisons speed
         self.points_per_cluster = {cluster: set(np.where(self.clusters == cluster)[0]) for cluster in self.unique_clusters} #points in every cluster
-        self.selection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & selection)[0]) for cluster in self.unique_clusters} #selected points in every cluster
-        self.nonselection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & ~selection)[0]) for cluster in self.unique_clusters} #unselected points in every cluster
-        # INTRA cluster information
-        self.closest_distances_intra = np.zeros(self.selection.shape[0], dtype=np.float32) #distances to closest selected point
-        self.closest_points_intra = np.arange(0, self.selection.shape[0], dtype=np.int32) #indices of closest selected point
-        # INTER cluster information
-        self.closest_distances_inter = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.float32) #distances to closest selected point
-        self.closest_points_inter = {pair: (None, None) for pair in itertools.combinations(self.unique_clusters, 2)} #indices of closest selected point
-        """
-        Interpretation of closest_points_inter_array: given a pair of clusters (cluster1, cluster2),
-        the value at closest_points_inter_array[cluster1, cluster2] is the index of the point in cluster2 that is closest to any point in cluster1.
-        The value at closest_points_inter_array[cluster2, cluster1] is the index of the point in cluster1 that is closest to any point in cluster2.
-        """
-        self.closest_points_inter_array = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.int32) #row=from, col=to
 
-        self.feasible = self.determine_feasibility()
-
-        self.objective = 0.0
-        if self.feasible:
-            # Set objective value
-            for idx in np.where(self.selection)[0]:
-                self.objective += self.cost_per_cluster[self.clusters[idx]]
-            # INTRA cluster distances
-            for idx in np.where(~self.selection)[0]:
-                cur_min = np.float32(np.inf)
-                cur_idx = idx
-                for other_idx in np.where((self.clusters == self.clusters[idx]) & self.selection)[0]:
-                    cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
-                    if cur_dist < cur_min:
-                        cur_min = cur_dist
-                        cur_idx = other_idx
-                self.closest_distances_intra[idx] = cur_min
-                self.closest_points_intra[idx] = cur_idx
-                self.objective += cur_min
-            # INTER cluster distances
-            for cluster_pair in itertools.combinations(self.unique_clusters, 2):
-                cluster_1 = np.where((self.clusters == cluster_pair[0]) & self.selection)[0]
-                cluster_2 = np.where((self.clusters == cluster_pair[1]) & self.selection)[0]
-                cur_max = -np.float32(np.inf)
-                cur_pair = (None, None)
-                for point_pair in itertools.product(cluster_1, cluster_2):
-                    cur_dist = 1.0 - get_distance(point_pair[0], point_pair[1], self.distances, self.num_points) #WARNING: precision errors might occur here!!
-                    if cur_dist > cur_max:
-                        cur_max = cur_dist
-                        cur_pair = point_pair
-                self.closest_distances_inter[cluster_pair[0], cluster_pair[1]] = cur_max
-                self.closest_distances_inter[cluster_pair[1], cluster_pair[0]] = cur_max
-                self.closest_points_inter[(cluster_pair[0], cluster_pair[1])] = cur_pair  # Store the first point index
-                self.closest_points_inter_array[(cluster_pair[0], cluster_pair[1])] = cur_pair[1]
-                self.closest_points_inter_array[(cluster_pair[1], cluster_pair[0])] = cur_pair[0]
-                self.objective += cur_max
-
-        else:
-            # If selection provided is not feasible, don't do anything (YET)
-            self.objective = 0.0
-            print("The solution is infeasible, objective value is set to INF and closest distances & points are not set.")
-
+        self.calculate_objective()
+        
     def __eq__(self, other):
         """
         Check if two solutions are equal.
@@ -176,6 +122,79 @@ class Solution:
                 print("Closest points inter array are not equal.")
                 return False
         return True
+
+    def determine_feasibility(self):
+        uncovered_clusters = set(self.unique_clusters)
+        for point in np.where(self.selection)[0]:
+            uncovered_clusters.discard(self.clusters[point])
+        return len(uncovered_clusters) == 0
+    
+    def calculate_objective(self):
+        """
+        Calculates the objective value of the solution, as well as set all the
+        inter and intra cluster distances and points.
+        """
+        # Re-determine the selected and unselected points for every cluster
+        self.selection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & self.selection)[0]) for cluster in self.unique_clusters} #selected points in every cluster
+        self.nonselection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & ~self.selection)[0]) for cluster in self.unique_clusters} #unselected points in every cluster
+        
+        # Re-initialize the closest distances and points arrays and dicts
+        # INTRA CLUSTER INFORMATION
+        self.closest_distances_intra = np.zeros(self.selection.shape[0], dtype=np.float32) #distances to closest selected point
+        self.closest_points_intra = np.arange(0, self.selection.shape[0], dtype=np.int32) #indices of closest selected point
+        # INTER CLUSTER INFORMATION
+        self.closest_distances_inter = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.float32) #distances to closest selected point
+        self.closest_points_inter = {pair: (None, None) for pair in itertools.combinations(self.unique_clusters, 2)} #indices of closest selected point
+        """
+        Interpretation of closest_points_inter_array: given a pair of clusters (cluster1, cluster2),
+        the value at closest_points_inter_array[cluster1, cluster2] is the index of the point in cluster2 that is closest to any point in cluster1.
+        The value at closest_points_inter_array[cluster2, cluster1] is the index of the point in cluster1 that is closest to any point in cluster2.
+        """
+        self.closest_points_inter_array = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.int32)
+
+        is_feasible = self.determine_feasibility()
+        if not is_feasible:
+            self.feasible = False
+            self.objective = np.inf
+            print("The solution is infeasible, objective value is set to INF and the closest distances & points are not set.")
+            return self.objective
+        self.feasible = True
+
+        # Calculate the objective value
+        objective = 0.0
+        # Selection cost
+        for idx in np.where(self.selection)[0]:
+            objective += self.cost_per_cluster[self.clusters[idx]]
+        # Intra cluster distance costs
+        for cluster in self.unique_clusters:
+            for idx in self.nonselection_per_cluster[cluster]:
+                cur_min = np.float32(np.inf)
+                cur_idx = None # index of the closest selected point of the same cluster
+                for other_idx in sorted(list(self.selection_per_cluster[cluster])): #this is to ensure consistent ordering
+                    cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
+                    if cur_dist < cur_min:
+                        cur_min = cur_dist
+                        cur_idx = other_idx
+                self.closest_distances_intra[idx] = np.float32(cur_min)
+                self.closest_points_intra[idx] = np.int32(cur_idx)
+                objective += cur_min
+        # Inter cluster distance costs
+        for cluster_1, cluster_2 in itertools.combinations(self.unique_clusters, 2):
+            cur_max = -np.float32(np.inf)
+            cur_pair = (None, None) # indices of the closest selected points of the two clusters
+            for point_1 in sorted(list(self.selection_per_cluster[cluster_1])): #this is to ensure consistent ordering
+                for point_2 in sorted(list(self.selection_per_cluster[cluster_2])): #this is to ensure consistent ordering
+                    cur_dist = 1.0 - get_distance(point_1, point_2, self.distances, self.num_points)
+                    if cur_dist > cur_max:
+                        cur_max = cur_dist
+                        cur_pair = (point_1, point_2)
+            self.closest_distances_inter[cluster_1, cluster_2] = cur_max
+            self.closest_distances_inter[cluster_2, cluster_1] = cur_max
+            self.closest_points_inter[(cluster_1, cluster_2)] = cur_pair
+            self.closest_points_inter_array[(cluster_1, cluster_2)] = cur_pair[1]
+            self.closest_points_inter_array[(cluster_2, cluster_1)] = cur_pair[0]
+            objective += cur_max
+        self.objective = objective
 
     @staticmethod
     def generate_centroid_solution(distances, clusters, selection_cost=0.1, cost_per_cluster=False, seed=None):
@@ -755,12 +774,6 @@ class Solution:
         elif move_type == "remove":
             idx_to_remove = move_content
             self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
-
-    def determine_feasibility(self):
-        uncovered_clusters = set(self.unique_clusters)
-        for point in np.where(self.selection)[0]:
-            uncovered_clusters.discard(self.clusters[point])
-        return len(uncovered_clusters) == 0
 
     def local_search(self, max_iterations: int = 10_000, num_cores: int = 1, hybrid: bool = True,
                            random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
