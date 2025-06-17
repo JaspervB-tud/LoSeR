@@ -7,9 +7,11 @@ from multiprocessing import Pool, Manager
 import time
 import traceback
 
-#TMP TEST
+# This is to define the precision threshold for floating point comparisons
+PRECISION_THRESHOLD = 1e-6
+
 class Solution:
-    def __init__(self, distances, clusters, selection=None, selection_cost=0.1, cost_per_cluster=0, seed=None):
+    def __init__(self, distances: np.ndarray, clusters: np.ndarray, selection=None, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
         # Assert that distances and clusters have the same number of rows
         if distances.shape[0] != clusters.shape[0]:
             raise ValueError("Number of points is different between distances and clusters.")
@@ -49,7 +51,7 @@ class Solution:
             if cost_per_cluster == 0: #default behavior, set to selection cost
                 self.cost_per_cluster[cluster] = selection_cost
             elif cost_per_cluster == 1: #set to 1 / number of points in cluster
-                self.cost_per_cluster[cluster] = 1 / np.sum(self.clusters == cluster)
+                self.cost_per_cluster[cluster] = selection_cost / np.sum(self.clusters == cluster)
             elif cost_per_cluster == 2:
                 # Define the average distance in a cluster as the average distance
                 # of all points in the cluster to the centroid of the cluster.
@@ -76,7 +78,7 @@ class Solution:
             print("Other object is not a Solution instance.")
             return False
         # Check if distances and clusters are equal
-        if not np.allclose(self.distances, other.distances, atol=1e-5) or not np.array_equal(self.clusters, other.clusters):
+        if not np.allclose(self.distances, other.distances, atol=PRECISION_THRESHOLD) or not np.array_equal(self.clusters, other.clusters):
             print("Distances or clusters are not equal.")
             return False
         # Check if selection is equal
@@ -88,26 +90,26 @@ class Solution:
         if not np.array_equal(self.selection, other.selection):
             return False
         # Check if selection cost is equal
-        if not math.isclose(self.selection_cost, other.selection_cost, rel_tol=1e-8):
+        if not math.isclose(self.selection_cost, other.selection_cost, rel_tol=PRECISION_THRESHOLD):
             return False
         # Check if feasible is equal
         if self.feasible != other.feasible:
             return False
         if self.feasible:
             # Check if objective is equal
-            if not math.isclose(self.objective, other.objective, rel_tol=1e-6):
+            if not math.isclose(self.objective, other.objective, rel_tol=PRECISION_THRESHOLD):
                 print("Objective values are not equal: ", self.objective, other.objective)
                 return False
             # Check if closest_distances_intra is equal
-            if not np.allclose(self.closest_distances_intra, other.closest_distances_intra, atol=1e-5):
+            if not np.allclose(self.closest_distances_intra, other.closest_distances_intra, atol=PRECISION_THRESHOLD):
                 print("Closest distances intra are not equal.")
                 return False
             # Check if closest_points_intra is equal
-            if not np.array_equal(self.closest_points_intra, other.closest_points_intra):
+            if not np.allclose(self.closest_points_intra, other.closest_points_intra, atol=PRECISION_THRESHOLD):
                 print("Closest points intra are not equal.")
                 return False
             # Check if closest_distances_inter is equal
-            if not np.allclose(self.closest_distances_inter, other.closest_distances_inter, atol=1e-5):
+            if not np.allclose(self.closest_distances_inter, other.closest_distances_inter, atol=PRECISION_THRESHOLD):
                 print("Closest distances inter are not equal.")
                 return False
             # Check if closest_points_inter is equal
@@ -118,12 +120,16 @@ class Solution:
                 if self.closest_points_inter[key] != other.closest_points_inter[key]:
                     print(f"Closest points inter for key {key} are not equal.")
                     return False
-            if not np.allclose(self.closest_points_inter_array, other.closest_points_inter_array, atol=1e-5):
+            if not np.allclose(self.closest_points_inter_array, other.closest_points_inter_array, atol=PRECISION_THRESHOLD):
                 print("Closest points inter array are not equal.")
                 return False
         return True
 
     def determine_feasibility(self):
+        """
+        Determines if the solution stored in this object is feasible.
+        NOTE: A solution is feasible if every cluster has at least one selected point.
+        """
         uncovered_clusters = set(self.unique_clusters)
         for point in np.where(self.selection)[0]:
             uncovered_clusters.discard(self.clusters[point])
@@ -133,6 +139,8 @@ class Solution:
         """
         Calculates the objective value of the solution, as well as set all the
         inter and intra cluster distances and points.
+        NOTE: If selection is not feasible, the objective value is set to np.inf
+        and some of the internal attributes will not be set.
         """
         # Re-determine the selected and unselected points for every cluster
         self.selection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & self.selection)[0]) for cluster in self.unique_clusters} #selected points in every cluster
@@ -197,7 +205,7 @@ class Solution:
         self.objective = objective
 
     @staticmethod
-    def generate_centroid_solution(distances, clusters, selection_cost=0.1, cost_per_cluster=False, seed=None):
+    def generate_centroid_solution(distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
         """
         Generates a Solution object with an initial solution by selecting the centroid for every cluster.
 
@@ -210,6 +218,12 @@ class Solution:
             A 1D array where clusters[i] represents the cluster assignment of point i.
         selection_cost: float
             The cost associated with selecting a point.
+        cost_per_cluster: int
+            Defines how the cost of selecting a point in each cluster is calculated.
+            0: Default behavior, set to selection cost.
+            1: Set to selection_cost / number of points in cluster.
+            2: Set to the average distance in a cluster (average distance of all points in the cluster to the centroid of the cluster).
+            3: Set to the average distance in a cluster (average distance of all points in the cluster to the closest point in the cluster).
         seed: int, optional
             Random seed for reproducibility.
             NOTE: The seed will create a random state for the solution, which is used for
@@ -239,7 +253,7 @@ class Solution:
         return Solution(distances, clusters, selection=selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=seed)
     
     @staticmethod
-    def generate_random_solution(distances, clusters, selection_cost=0.1, cost_per_cluster=False, max_fraction=0.1, seed=None):
+    def generate_random_solution(distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, max_fraction=0.1, seed=None):
         """
         Generates a Solution object with an initial solution by randomly selecting points.
 
@@ -252,6 +266,12 @@ class Solution:
             A 1D array where clusters[i] represents the cluster assignment of point i.
         selection_cost: float
             The cost associated with selecting a point.
+        cost_per_cluster: int
+            Defines how the cost of selecting a point in each cluster is calculated.
+            0: Default behavior, set to selection cost.
+            1: Set to selection_cost / number of points in cluster.
+            2: Set to the average distance in a cluster (average distance of all points in the cluster to the centroid of the cluster).
+            3: Set to the average distance in a cluster (average distance of all points in the cluster to the closest point in the cluster).
         max_fraction: float
             The maximum fraction of points to select (0-1].
             NOTE: If smaller than 1 divided by the number of clusters,
@@ -300,6 +320,29 @@ class Solution:
     def evaluate_add(self, idx_to_add, local_search=False):
         """
         Evaluates whether the proposed addition improves the current solution.
+
+        Parameters:
+        -----------
+        idx_to_add: int
+            The index of the point to be added.
+        local_search: bool
+            If True, the method will return (np.inf, None, None) if the candidate objective
+            is worse than the current objective, allowing for local search to skip unnecessary evaluations.
+            If False, it will always evaluate the addition.
+        
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+            NOTE: If local_search is True, the returned value can be np.inf if
+            the candidate objective is worse than the current objective based
+            on intra distances.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_distance, index_in_other_cluster)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
@@ -316,7 +359,7 @@ class Solution:
                 add_within_cluster.append((idx, cur_dist))
 
         # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
-        if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > 1e-6 and local_search:
+        if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > PRECISION_THRESHOLD and local_search:
             return np.inf, None, None
 
         # Inter cluster distances for other clusters
@@ -336,13 +379,14 @@ class Solution:
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
-    def accept_add(self, idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters):
+    def accept_add(self, idx_to_add: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
         Accepts the addition of a point to the solution.
-        Note that this assumes that the initial solution
+        NOTE: this assumes that the initial solution
         was feasible.
-        ------------------------------------------------
+
         PARAMETERS:
+        -----------
         idx_to_add: int
             The index of the point to be added.
         candidate_objective: float
@@ -376,17 +420,38 @@ class Solution:
         # Update objective value
         self.objective = candidate_objective
          
-    def evaluate_swap(self, idx_to_add, idx_to_remove):
+    def evaluate_swap(self, idx_to_add: int, idx_to_remove: int):
         """
         Evaluates whether the proposed swap improves the current solution.
+
+        Parameters:
+        -----------
+        idx_to_add: int
+            The index of the point to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, closest_point_pair, new_distance)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
-        if self.selection[idx_to_add] or not self.selection[idx_to_remove]:
-            raise ValueError("The point to add must not be selected and the point to remove must be selected.")
+        if self.selection[idx_to_add]:
+            raise ValueError("The point to add must not be selected.")
+        if not self.selection[idx_to_remove]:
+            raise ValueError("The point to remove must be selected.")
         cluster = self.clusters[idx_to_add]
         if cluster != self.clusters[idx_to_remove]:
             raise ValueError("The points to swap must be in the same cluster.")
+        
         candidate_objective = self.objective
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
@@ -452,13 +517,14 @@ class Solution:
                         add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
-    def accept_swap(self, idx_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+    def accept_swap(self, idx_to_add: int, idx_to_remove: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
-        Accepts the swap of a pair of points to the solution.
-        Note that this assumes that the initial solution
+        Accepts the swap of the pair of points in the solution.
+        NOTE: this assumes that the initial solution
         was feasible.
-        -----------------------------------------------------
+
         PARAMETERS:
+        -----------
         idx_to_add: int
             The index of the point to be added.
         idx_to_remove: int
@@ -471,7 +537,7 @@ class Solution:
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
             Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
-            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+            NOTE: for cur_closest_pair, the first index is in the cluster with lowest index.
         """
         cluster = self.clusters[idx_to_add]
         # Update selected points
@@ -500,18 +566,41 @@ class Solution:
         # Update objective value
         self.objective = candidate_objective
 
-    def evaluate_doubleswap(self, idxs_to_add, idx_to_remove):
+    def evaluate_doubleswap(self, idxs_to_add, idx_to_remove: int):
         """
         Evaluates whether the proposed double swap improves the current solution.
+
+        Parameters:
+        -----------
+        idxs_to_add: tuple of int or list of int
+            A tuple containing the indices of the two points to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, closest_point_pair, new_distance)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
         idx_to_add1, idx_to_add2 = idxs_to_add
-        if self.selection[idx_to_add1] or self.selection[idx_to_add2] or not self.selection[idx_to_remove]:
-            raise ValueError("The point(s) to add must not be selected and the point to remove must be selected.")
+        if self.selection[idx_to_add1]:
+            raise ValueError("The first point to add must not be selected.")
+        if self.selection[idx_to_add2]:
+            raise ValueError("The second point to add must not be selected.")
+        if not self.selection[idx_to_remove]:
+            raise ValueError("The point to remove must be selected.")
         cluster = self.clusters[idx_to_add1]
         if cluster != self.clusters[idx_to_remove] or cluster != self.clusters[idx_to_add2]:
             raise ValueError("All points must be in the same cluster.")
+        
         candidate_objective = self.objective + self.cost_per_cluster[cluster]
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
@@ -585,13 +674,14 @@ class Solution:
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
-    def accept_doubleswap(self, idxs_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+    def accept_doubleswap(self, idxs_to_add: tuple, idx_to_remove: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
-        Accepts the double swap of a pair of points to the solution.
-        Note that this assumes that the initial solution
+        Accepts the doubleswap of the pair of points in the solution.
+        NOTE: this assumes that the initial solution
         was feasible.
-        -----------------------------------------------------
+
         PARAMETERS:
+        -----------
         idxs_to_add: tuple of ints
             The indices of the points to be added.
         idx_to_remove: int
@@ -604,7 +694,7 @@ class Solution:
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
             Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
-            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+            NOTE: for cur_closest_pair, the first index is in the cluster with lowest index.
         """
         idx_to_add1, idx_to_add2 = idxs_to_add
         cluster = self.clusters[idx_to_add1]
@@ -637,12 +727,37 @@ class Solution:
         # Update objective value
         self.objective = candidate_objective
 
-    def evaluate_remove(self, idx_to_remove, local_search=False):
+    def evaluate_remove(self, idx_to_remove: int, local_search: bool = False):
         """
         Evaluates whether the proposed removal improves the current solution.
+
+        Parameters:
+        -----------
+        idx_to_remove: int
+            The index of the point to be removed.
+        local_search: bool
+            If True, the method will return (np.inf, None, None) if the candidate objective
+            is worse than the current objective, allowing for local search to skip unnecessary evaluations.
+            If False, it will always evaluate the addition.
+        
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, closest_point_pair, new_distance)]
         """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot evaluate removal.")
+        if not self.selection[idx_to_remove]:
+            raise ValueError("The point to remove must be selected.")
         cluster = self.clusters[idx_to_remove]
         candidate_objective = self.objective - self.cost_per_cluster[cluster]
+
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
         new_selection.discard(idx_to_remove)
@@ -698,13 +813,14 @@ class Solution:
         
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
-    def accept_remove(self, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters):
+    def accept_remove(self, idx_to_remove: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
-        Accepts the removal of a point from the solution.
-        Note that this assumes that the initial solution
-        and resulting solution are feasible.
-        -----------------------------------------------------
+        Accepts the addition of a point to the solution.
+        NOTE: this assumes that the initial solution
+        was feasible.
+
         PARAMETERS:
+        -----------
         idx_to_remove: int
             The index of the point to be removed.
         candidate_objective: float
@@ -715,7 +831,7 @@ class Solution:
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
             Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
-            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
+            NOTE: for cur_closest_pair, the first index is in the cluster with lowest index.
         """
         cluster = self.clusters[idx_to_remove]
         # Update selected points
@@ -741,13 +857,14 @@ class Solution:
         # Update objective value
         self.objective = candidate_objective
 
-    def accept_move(self, move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters):
+    def accept_move(self, move_type: str, move_content, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
         Accepts a move to the solution.
         NOTE: This assumes that the initial solution and the move
         are feasible and will not check for this.
-        -----------------------------------------------------
+
         PARAMETERS:
+        -----------
         move_type: str
             The type of the move (e.g., "add", "swap", "doubleswap", "remove").
         move_content: int or tuple
@@ -782,15 +899,17 @@ class Solution:
                            logging: bool = False, logging_frequency: int = 500,
                            ):
         """
-        Perform local search to find a (local) optimal solution.
-        --------------------------------------------------------
+        Perform local search to find a (local) optimal solution. Allows for both
+        single-core and multi-core execution.
+        
         Parameters:
+        -----------
         max_iterations: int
             The maximum number of iterations to perform.
         num_cores: int
             The number of cores to use for parallel processing.
-            NOTE: If set to 1, local search will always run in
-                    single processor mode, even if hybrid is True.
+            NOTE: if set to 1, local search will always run in
+            single processor mode, even if hybrid is True.
         hybrid: bool
             If True, local search will switch to multiprocessing
             after num_switch consecutive iterations take longer
@@ -800,7 +919,7 @@ class Solution:
             remove) is randomized.
         random_index_order: bool
             If True, the order of indices for moves is randomized.
-            NOTE: If random_move_order is True, but this is false,
+            NOTE: if random_move_order is True, but this is false,
             all moves of a particular type will be tried before
             moving to the next move type, but the order of moves
             is random).
@@ -808,21 +927,23 @@ class Solution:
             If provided, this list will be used to determine the
             order of moves. If random_move_order is True, this
             list will be shuffled before use.
-            NOTE: This list must contain the following move types (as strings):
+            NOTE: this list should contain the following move types (as strings):
                 - "add"
                 - "swap"
                 - "doubleswap"
                 - "remove"
+            NOTE: by leaving out a move type, it will not be
+            considered in the local search.
         batch_size: int
             In multiprocessing mode, moves are processed in batches
             of this size.
-            NOTE: Do not set this to a value smaller than 0
+            NOTE: do not set this to a value smaller than 0
         max_batches: int
             To prevent memory issues, the number of batches is
             limited to this value. Once every batch has been
             processed, the next set of batches will be
             processed.
-            NOTE: This should be set to at least the number of
+            NOTE: this should be set to at least the number of
             num_cores, otherwise some cores will be idle.
         runtime_switch: float
             If hybrid is True, the local search will switch to
@@ -837,16 +958,19 @@ class Solution:
         logging_frequency: int
             If logging is True, information will be printed every
             logging_frequency iterations.
-        ----------------------------------------------------------------------
+
         Returns:
+        --------
         time_per_iteration: list of floats
             The time taken for each iteration.
-            NOTE: This is primarily for logging purposes
+            NOTE: this is primarily for logging purposes
         objectives: list of floats
-            The objective value in each iteration.
+            The objective value after each iteration.
         switch_iteration: int
             The iteration at which the local search switched to
-            multiprocessing, or -1 if it did not switch.
+            multiprocessing when using hybrid mode.
+            NOTE: if the search did not switch to multiprocessing,
+            or ran in single-processing mode, this will be -1.
         """
         # Validate input parameters
         if not isinstance(max_iterations, int) or max_iterations < 1:
@@ -1003,25 +1127,25 @@ class Solution:
                                 for move_type, move_content in move_generator:
                                     if move_type == "add":
                                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(move_content, local_search=True)
-                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                             solution_changed = True
                                             break
                                     elif move_type == "swap":
                                         idx_to_add, idx_to_remove = move_content
                                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
-                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                             solution_changed = True
                                             break
                                     elif move_type == "doubleswap":
                                         idxs_to_add, idx_to_remove = move_content
                                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap(idxs_to_add, idx_to_remove)
-                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                             solution_changed = True
                                             break
                                     elif move_type == "remove":
                                         idx_to_remove = move_content
                                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
-                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                             solution_changed = True
                                             break
 
@@ -1082,25 +1206,25 @@ class Solution:
                     if move_type == "add":
                         idx_to_add = move_content
                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
-                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                             solution_changed = True
                             break
                     elif move_type == "swap":
                         idx_to_add, idx_to_remove = move_content
                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
-                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                             solution_changed = True
                             break
                     elif move_type == "doubleswap":
                         idxs_to_add, idx_to_remove = move_content
                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap(idxs_to_add, idx_to_remove)
-                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                             solution_changed = True
                             break
                     elif move_type == "remove":
                         idx_to_remove = move_content
                         candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
-                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                        if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                             solution_changed = True
                             break
                 
@@ -1124,15 +1248,16 @@ class Solution:
                            logging: bool = False, logging_frequency: int = 500,
                            ):
         """
-        Perform local search to find a (local) optimal solution.
-        --------------------------------------------------------
+        Perform local search to find a (local) optimal solution using an adaptive approach where
+        the search switches between single-core and multi-core execution based on the runtime of iterations.
+
         Parameters:
         max_iterations: int
             The maximum number of iterations to perform.
         num_cores: int
             The number of cores to use for parallel processing.
-            NOTE: If set to 1, local search will always run in
-                    single processor mode, even if hybrid is True.
+            NOTE: if set to 1, local search will always run in
+            single processor mode, even if hybrid is True.
         hybrid: bool
             If True, local search will switch to multiprocessing
             after num_switch consecutive iterations take longer
@@ -1142,7 +1267,7 @@ class Solution:
             remove) is randomized.
         random_index_order: bool
             If True, the order of indices for moves is randomized.
-            NOTE: If random_move_order is True, but this is false,
+            NOTE: if random_move_order is True, but this is false,
             all moves of a particular type will be tried before
             moving to the next move type, but the order of moves
             is random).
@@ -1150,40 +1275,38 @@ class Solution:
             If provided, this list will be used to determine the
             order of moves. If random_move_order is True, this
             list will be shuffled before use.
-            NOTE: This list must contain the following move types (as strings):
+            NOTE: this list should contain the following move types (as strings):
                 - "add"
                 - "swap"
                 - "doubleswap"
                 - "remove"
+            NOTE: by leaving out a move type, it will not be
+            considered in the local search.
         batch_size: int
             In multiprocessing mode, moves are processed in batches
             of this size.
-            NOTE: Do not set this to a value smaller than 0
+            NOTE: do not set this to a value smaller than 0
         max_batches: int
             To prevent memory issues, the number of batches is
             limited to this value. Once every batch has been
             processed, the next set of batches will be
             processed.
-            NOTE: This should be set to at least the number of
+            NOTE: this should be set to at least the number of
             num_cores, otherwise some cores will be idle.
         runtime_switch: float
-            If hybrid is True, the local search will switch to
-            multiprocessing after num_switch consecutive iterations
-            take longer than this number of seconds.
-        num_switch: int
-            If hybrid is True, the local search will switch to
-            multiprocessing after this number of consecutive iterations
-            take longer than runtime_switch seconds.
+            Threshold in seconds for switching between single-core and multi-core 
+            execution.
         logging: bool
             If True, information about the local search will be printed.
         logging_frequency: int
             If logging is True, information will be printed every
             logging_frequency iterations.
-        ----------------------------------------------------------------------
+        
         Returns:
+        --------
         time_per_iteration: list of floats
             The time taken for each iteration.
-            NOTE: This is primarily for logging purposes
+            NOTE: this is primarily for logging purposes
         objectives: list of floats
             The objective value in each iteration.
         """
@@ -1267,30 +1390,31 @@ class Solution:
                             move_counter += 1
                             if move_type == "add":
                                 candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(move_content, local_search=True)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
                                     break
                             elif move_type == "swap":
                                 idx_to_add, idx_to_remove = move_content
                                 candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
                                     break
                             elif move_type == "doubleswap":
                                 idxs_to_add, idx_to_remove = move_content
                                 candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap(idxs_to_add, idx_to_remove)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
                                     break
                             elif move_type == "remove":
                                 idx_to_remove = move_content
                                 candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > 1e-6:
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
                                     break
                             if move_counter % 1_000: #every 1000 moves, check if we should switch to multiprocessing
                                 if time.time() - current_iteration_time > runtime_switch:
-                                    print(f"Iteration {iteration+1} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
+                                    if logging:
+                                        print(f"Iteration {iteration+1} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
                                     run_in_multiprocessing = True
                                     break #break out of singleprocessing
                             
@@ -1351,7 +1475,8 @@ class Solution:
                                         break
                                     else:
                                         num_solutions_tried += num_this_loop
-                                        print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
+                                        if logging:
+                                            print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
 
                                 else: # No more tasks to process, break while loop
                                     break
@@ -1489,15 +1614,15 @@ class Solution:
 
         return objectives, selections
 
-    def generate_indices_add(self, random=False):
+    def generate_indices_add(self, random: bool = False):
         """
         Generates indices of points that can be added to the solution.
-        --------------------------------------------------------------
+        
         Parameters:
         -----------
         random: bool
             If True, the order of indices is randomized. Default is False.
-            NOTE: This uses the random state stored in the Solution object.
+            NOTE: this uses the random state stored in the Solution object.
         """
         indices = np.flatnonzero(~self.selection)
         if random:
@@ -1505,18 +1630,19 @@ class Solution:
         else:
             yield from indices
 
-    def generate_indices_swap(self, number_to_add=1, random=False):
+    def generate_indices_swap(self, number_to_add: int = 1, random: bool = False):
         """
         Generates indices of pairs of points that can be swapped in the solution.
-        -------------------------------------------------------------------------
+        NOTE: when running in random mode, we randomly iterate over 
+        
         Parameters:
         -----------
         number_to_add: int
             The number of points to add in the swap operation. Default is 1 (remove 1 point, add 1 point).
         random: bool
             If True, the order of indices is randomized. Default is False.
-            NOTE: This uses the random state stored in the Solution object.
-            NOTE: Although the cluster order can be randomized, the cluster is exhausted before moving to the next cluster.
+            NOTE: this uses the random state stored in the Solution object.
+            NOTE: although the cluster order can be randomized, the cluster is exhausted before moving to the next cluster.
         """
         if random:
             cluster_order = self.random_state.permutation(self.unique_clusters)
@@ -1544,7 +1670,7 @@ class Solution:
     def generate_indices_remove(self, random=False):
         """
         Generates indices of points that can be removed from the solution.
-        ------------------------------------------------------------------
+        
         Parameters:
         -----------
         random: bool
@@ -1569,7 +1695,7 @@ class Solution:
         """
         Creates a generator that generates moves in a specific order, or
         random order.
-        ----------------------------------------------------------------
+        
         Parameters:
         -----------
         random_move_order: bool
@@ -1615,6 +1741,9 @@ class Solution:
     
 """
 Here we define helper functions that can be used by the multiprocessing version of the local search.
+The key characteristic of these functions is that they do not rely on an explicit instance of the
+Solution class, but rather use shared memory as well as initialized variables to evaluate moves
+in parallel.
 """
 def evaluate_add_mp(
         idx_to_add, objective,
@@ -1891,6 +2020,7 @@ def init_worker(
         Array of unique cluster indices.
     cost_per_cluster: np.ndarray
         Costs associated with selecting a point.
+        NOTE: This cost may be different for each cluster.
     num_points: int
         Total number of points in the dataset.
     """
