@@ -1248,6 +1248,7 @@ class Solution:
                            batch_size: int = 1000, max_batches: int = 32, 
                            runtime_switch: float = 10.0,
                            logging: bool = False, logging_frequency: int = 500,
+                           test = False
                            ):
         """
         Perform local search to find a (local) optimal solution using an adaptive approach where
@@ -1384,7 +1385,10 @@ class Solution:
                         objectives.append(self.objective)
                         solution_changed = False
                         run_in_multiprocessing = False 
-                        move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
+                        if test:
+                            move_generator = self.generate_moves_experimental()
+                        else:
+                            move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
 
                         current_iteration_time = time.time() #This is for logging purposes and for adaptive mode tracking
                         move_counter = 0
@@ -1740,6 +1744,59 @@ class Solution:
                 yield selected_generator, next(generators[selected_generator])
             except StopIteration:
                 active_generators.remove(selected_generator)
+
+    def generate_moves_experimental(self, random_cluster=False):
+        """
+        The idea here is to generate random indices in the following way:
+        + generate a random cluster index
+            + randomly generate an index of a point in that cluster
+                + if the point is chosen check the following moves:
+                    + if this point is not selected:
+                        + try to add it
+                        + for all selected indices smaller/larger (randomly chosen during initialization) than this point:
+                            + try to swap
+                    + if this point is selected:
+                        + try to remove it
+                        + for all unselected indices larger/smaller (opposite of the previous) than this point:
+                            + try to swap
+                        + try all doubleswaps that involve this selected point
+        """
+        bigger = self.random_state.choice([True, False]) #this is used to determine whether to swap with larger or smaller indices
+        
+        remaining_points = np.ones(self.num_points, dtype=bool) #this is used to keep track of which points are still available for moves
+        remaining_clusters = list(range(self.unique_clusters.shape[0])) #this is used to keep track of which clusters are still available for moves
+        
+        while remaining_clusters:
+            if random_cluster:
+                cluster_idx = self.random_state.choice(remaining_clusters)
+                # Pick a random remaining index from the cluster
+                point_idx = self.random_state.choice(np.where((self.clusters == cluster_idx) & remaining_points)[0])
+            else:
+                point_idx = self.random_state.choice(np.where(remaining_points)[0])
+                cluster_idx = self.clusters[point_idx]
+            remaining_points[point_idx] = False #mark this point as used
+            if self.selection[point_idx]: #if the point is selected
+                # Try removing if at least 1 other point also selected
+                if len(self.selection_per_cluster[cluster_idx]) > 1: #if there are more than one points in the cluster
+                    yield "remove", point_idx
+                # Try swapping with other unselected oints in this cluster
+                candidate_points = self.random_state.permutation(np.where((self.clusters == cluster_idx) & ~self.selection)[0])
+                for other_point in candidate_points:
+                    if (bigger and other_point > point_idx) or (not bigger and other_point < point_idx):
+                        yield "swap", (other_point, point_idx)
+                for other_points in itertools.combinations(candidate_points, 2):
+                    yield "doubleswap", (other_points, point_idx)
+            else: #if point not selected
+                # Try adding point to solution
+                yield "add", point_idx
+                for other_point in self.random_state.permutation(np.where((self.clusters == cluster_idx) & self.selection)[0]):
+                    if (bigger and other_point > point_idx) or (not bigger and other_point < point_idx):
+                        yield "swap", (point_idx, other_point)
+            if np.sum((self.clusters == cluster_idx) & remaining_points) == 0: #if no more points in this cluster, remove it from remaining clusters
+                remaining_clusters.remove(cluster_idx)
+
+
+        
     
 """
 Here we define helper functions that can be used by the multiprocessing version of the local search.
