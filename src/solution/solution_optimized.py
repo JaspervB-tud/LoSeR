@@ -6,6 +6,7 @@ import multiprocessing.shared_memory as shm
 from multiprocessing import Pool, Manager
 import time
 import traceback
+from collections import deque
 
 # This is to define the precision threshold for floating point comparisons
 PRECISION_THRESHOLD = 1e-6
@@ -1248,7 +1249,6 @@ class Solution:
                            batch_size: int = 1000, max_batches: int = 32, 
                            runtime_switch: float = 10.0,
                            logging: bool = False, logging_frequency: int = 500,
-                           test = False
                            ):
         """
         Perform local search to find a (local) optimal solution using an adaptive approach where
@@ -1385,10 +1385,287 @@ class Solution:
                         objectives.append(self.objective)
                         solution_changed = False
                         run_in_multiprocessing = False 
-                        if test:
-                            move_generator = self.generate_moves_experimental()
+
+                        move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
+
+                        current_iteration_time = time.time() #This is for logging purposes and for adaptive mode tracking
+                        move_counter = 0
+                        for move_type, move_content in move_generator:
+                            move_counter += 1
+                            if move_type == "add":
+                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(move_content, local_search=True)
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
+                                    solution_changed = True
+                                    break
+                            elif move_type == "swap":
+                                idx_to_add, idx_to_remove = move_content
+                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
+                                    solution_changed = True
+                                    break
+                            elif move_type == "doubleswap":
+                                idxs_to_add, idx_to_remove = move_content
+                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap(idxs_to_add, idx_to_remove)
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
+                                    solution_changed = True
+                                    break
+                            elif move_type == "remove":
+                                idx_to_remove = move_content
+                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
+                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
+                                    solution_changed = True
+                                    break
+                            if move_counter % 1_000: #every 1000 moves, check if we should switch to multiprocessing
+                                if time.time() - current_iteration_time > runtime_switch:
+                                    if logging:
+                                        print(f"Iteration {iteration+1} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
+                                    run_in_multiprocessing = True
+                                    break #break out of singleprocessing
+                            
+                        if run_in_multiprocessing: #If switching to multiprocessing
+                            # Start by updating shared memory arrays
+                            np.copyto(shared_closest_distances_intra, self.closest_distances_intra)
+                            np.copyto(shared_closest_points_intra, self.closest_points_intra)
+                            np.copyto(shared_closest_distances_inter, self.closest_distances_inter)
+                            np.copyto(shared_closest_points_inter, self.closest_points_inter_array)
+                            
+                            event.clear() #reset event for current iteration
+                            results = [] #resets results for current iteration
+
+                            num_solutions_tried = 0
+                            # Try moves in batches
+                            while True:
+                                batches = []
+                                num_this_loop = 0
+                                cur_batch_time = time.time()
+                                for _ in range(max_batches): #fill list with up to max_batches batches
+                                    batch = [] #batch of moves
+                                    try:
+                                        for _ in range(batch_size):
+                                            move_type, move_content = next(move_generator)
+                                            batch.append((move_type, move_content))
+                                    except StopIteration:
+                                        if len(batch) > 0:
+                                            batches.append(batch)
+                                            num_this_loop += len(batch)
+                                        break
+                                    if len(batch) > 0:
+                                        batches.append(batch)
+                                        num_this_loop += len(batch)
+
+                                # Process current collection of batches in parallel
+                                if len(batches) > 0:
+                                    batch_results = []
+                                    for batch in batches:
+                                        if event.is_set():
+                                            break
+                                        res = pool.apply_async(
+                                            process_batch,
+                                            args=(
+                                                batch, event, 
+                                                self.selection_per_cluster, self.nonselection_per_cluster,
+                                                self.objective
+                                            ),
+                                            callback = lambda result: process_batch_result(result, results)
+                                        )
+                                        batch_results.append(res)
+
+                                    for result in batch_results:
+                                        result.wait()
+
+                                    if len(results) > 0: #if improvement is found, stop processing batches
+                                        solution_changed = True
+                                        move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters = results[0]
+                                        break
+                                    else:
+                                        num_solutions_tried += num_this_loop
+                                        if logging:
+                                            print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
+
+                                else: # No more tasks to process, break while loop
+                                    break
+
+                        time_per_iteration.append(time.time() - current_iteration_time)
+                        if solution_changed: # If improvement is found, update solution
+                            self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            iteration += 1 #update iteration count
                         else:
-                            move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
+                            break
+                                
+                        if iteration % logging_frequency == 0 and logging:
+                            print(f"Iteration {iteration}: Objective = {self.objective:.6f}", flush=True)
+                            print(f"Average runtime last {logging_frequency} iterations: {np.mean(time_per_iteration[-logging_frequency:]):.6f} seconds", flush=True)
+        except Exception as e:
+            print(f"An error occurred during local search: {e}", flush=True)
+            print("Traceback details:", flush=True)
+            traceback.print_exc()
+            raise e
+        finally:
+            # Clean up shared memory if it was created
+            if distances_shm:
+                distances_shm.close()
+                distances_shm.unlink()
+            if clusters_shm:
+                clusters_shm.close()
+                clusters_shm.unlink()
+            if closest_distances_intra_shm:
+                closest_distances_intra_shm.close()
+                closest_distances_intra_shm.unlink()
+            if closest_points_intra_shm:
+                closest_points_intra_shm.close()
+                closest_points_intra_shm.unlink()
+            if closest_distances_inter_shm:
+                closest_distances_inter_shm.close()
+                closest_distances_inter_shm.unlink()
+            if closest_points_inter_shm:
+                closest_points_inter_shm.close()
+                closest_points_inter_shm.unlink()
+
+        return time_per_iteration, objectives
+
+    def local_search_adaptive_experimental(self, max_iterations: int = 10_000, num_cores: int = 2,
+                           random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
+                           batch_size: int = 1000, max_batches: int = 32, 
+                           runtime_switch: float = 10.0,
+                           logging: bool = False, logging_frequency: int = 500,
+                           ):
+        """
+        Perform local search to find a (local) optimal solution using an adaptive approach where
+        the search switches between single-core and multi-core execution based on the runtime of iterations.
+
+        Parameters:
+        max_iterations: int
+            The maximum number of iterations to perform.
+        num_cores: int
+            The number of cores to use for parallel processing.
+            NOTE: if set to 1, local search will always run in
+            single processor mode, even if hybrid is True.
+        hybrid: bool
+            If True, local search will switch to multiprocessing
+            after num_switch consecutive iterations take longer
+            than runtime_switch seconds.
+        random_move_order: bool
+            If True, the order of moves (add, swap, doubleswap,
+            remove) is randomized.
+        random_index_order: bool
+            If True, the order of indices for moves is randomized.
+            NOTE: if random_move_order is True, but this is false,
+            all moves of a particular type will be tried before
+            moving to the next move type, but the order of moves
+            is random).
+        move_order: list
+            If provided, this list will be used to determine the
+            order of moves. If random_move_order is True, this
+            list will be shuffled before use.
+            NOTE: this list should contain the following move types (as strings):
+                - "add"
+                - "swap"
+                - "doubleswap"
+                - "remove"
+            NOTE: by leaving out a move type, it will not be
+            considered in the local search.
+        batch_size: int
+            In multiprocessing mode, moves are processed in batches
+            of this size.
+            NOTE: do not set this to a value smaller than 0
+        max_batches: int
+            To prevent memory issues, the number of batches is
+            limited to this value. Once every batch has been
+            processed, the next set of batches will be
+            processed.
+            NOTE: this should be set to at least the number of
+            num_cores, otherwise some cores will be idle.
+        runtime_switch: float
+            Threshold in seconds for switching between single-core and multi-core 
+            execution.
+        logging: bool
+            If True, information about the local search will be printed.
+        logging_frequency: int
+            If logging is True, information will be printed every
+            logging_frequency iterations.
+        
+        Returns:
+        --------
+        time_per_iteration: list of floats
+            The time taken for each iteration.
+            NOTE: this is primarily for logging purposes
+        objectives: list of floats
+            The objective value in each iteration.
+        """
+        # Validate input parameters
+        if not isinstance(max_iterations, int) or max_iterations < 1:
+            raise ValueError("max_iterations must be a positive integer.")
+        if not isinstance(num_cores, int) or num_cores < 2:
+            raise ValueError("num_cores must be a positive integer and larger than 1.")
+        if not isinstance(random_move_order, bool):
+            raise ValueError("random_move_order must be a boolean value.")
+        if not isinstance(random_index_order, bool):
+            raise ValueError("random_index_order must be a boolean value.")
+        if not isinstance(batch_size, int) or batch_size < 1:
+            raise ValueError("batch_size must be a positive integer.")
+        if not isinstance(max_batches, int) or max_batches < 1:
+            raise ValueError("max_batches must be a positive integer.")
+        if not isinstance(runtime_switch, (int, float)) or runtime_switch < 0:
+            raise ValueError("runtime_switch must be a non-negative number.")
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot perform local search.")
+
+        # Initialize variables
+        iteration = 0
+        time_per_iteration = []
+        objectives = []
+        solution_changed = False
+        run_in_multiprocessing = False
+
+        # Multiprocessing
+        try:
+            # Copy distance matrix to shared memory
+            distances_shm = shm.SharedMemory(create=True, size=self.distances.nbytes)
+            shared_distances = np.ndarray(self.distances.shape, dtype=self.distances.dtype, buffer=distances_shm.buf)
+            np.copyto(shared_distances, self.distances) #this array is static, only copy once
+            # Copy cluster assignment to shared memory
+            clusters_shm = shm.SharedMemory(create=True, size=self.clusters.nbytes)
+            shared_clusters = np.ndarray(self.clusters.shape, dtype=self.clusters.dtype, buffer=clusters_shm.buf)
+            np.copyto(shared_clusters, self.clusters) #this array is static, only copy once
+
+            # for the intra and inter distances, only copy them during iterations since they are updated during the local search
+            # Copy closest_distances_intra to shared memory
+            closest_distances_intra_shm = shm.SharedMemory(create=True, size=self.closest_distances_intra.nbytes)
+            shared_closest_distances_intra = np.ndarray(self.closest_distances_intra.shape, dtype=self.closest_distances_intra.dtype, buffer=closest_distances_intra_shm.buf)
+            # Copy closest_points_intra to shared memory
+            closest_points_intra_shm = shm.SharedMemory(create=True, size=self.closest_points_intra.nbytes)
+            shared_closest_points_intra = np.ndarray(self.closest_points_intra.shape, dtype=self.closest_points_intra.dtype, buffer=closest_points_intra_shm.buf)
+
+            # Copy closest_distances_inter to shared memory
+            closest_distances_inter_shm = shm.SharedMemory(create=True, size=self.closest_distances_inter.nbytes)
+            shared_closest_distances_inter = np.ndarray(self.closest_distances_inter.shape, dtype=self.closest_distances_inter.dtype, buffer=closest_distances_inter_shm.buf)
+            # Copy closest_points_inter to shared memory
+            closest_points_inter_shm = shm.SharedMemory(create=True, size=self.closest_points_inter_array.nbytes)
+            shared_closest_points_inter = np.ndarray(self.closest_points_inter_array.shape, dtype=self.closest_points_inter_array.dtype, buffer=closest_points_inter_shm.buf)
+
+            with Manager() as manager:
+                event = manager.Event() #this is used to signal when tasks should be stopped
+                results = manager.list() #this is used to store an improvement is one is found
+
+                with Pool(
+                    processes=num_cores,
+                    initializer=init_worker,
+                    initargs=(
+                        distances_shm.name, shared_distances.shape,
+                        clusters_shm.name, shared_clusters.shape,
+                        closest_distances_intra_shm.name, shared_closest_distances_intra.shape,
+                        closest_points_intra_shm.name, shared_closest_points_intra.shape,
+                        closest_distances_inter_shm.name, shared_closest_distances_inter.shape,
+                        closest_points_inter_shm.name, shared_closest_points_inter.shape,
+                        self.unique_clusters, self.cost_per_cluster, self.num_points
+                    ),
+                ) as pool:
+                    while iteration < max_iterations:
+                        objectives.append(self.objective)
+                        solution_changed = False
+                        run_in_multiprocessing = False 
+
+                        move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
 
                         current_iteration_time = time.time() #This is for logging purposes and for adaptive mode tracking
                         move_counter = 0
@@ -1745,59 +2022,54 @@ class Solution:
             except StopIteration:
                 active_generators.remove(selected_generator)
 
-    def generate_moves_experimental(self, random_cluster=False):
+    def generate_moves_biased(self, random_move_order: bool = True, random_index_order: bool = True, order=["add", "swap", "doubleswap", "remove"]):
         """
-        The idea here is to generate random indices in the following way:
-        + generate a random cluster index
-            + randomly generate an index of a point in that cluster
-                + if the point is chosen check the following moves:
-                    + if this point is not selected:
-                        + try to add it
-                        + for all selected indices smaller/larger (randomly chosen during initialization) than this point:
-                            + try to swap
-                    + if this point is selected:
-                        + try to remove it
-                        + for all unselected indices larger/smaller (opposite of the previous) than this point:
-                            + try to swap
-                        + try all doubleswaps that involve this selected point
+        Creates a generator that generates moves in a specific order, or
+        random order.
+        
+        Parameters:
+        -----------
+        random_move_order: bool
+            If True, the order of move types (add, swap, doubleswap, remove) is randomized.
+        random_index_order: bool
+            If True, the order of indices for each move type is randomized.
+            NOTE: If random_move_order is False, this will still randomize the order in which
+            indices are generated for each move type, but the order of move types will
+            be fixed as specified in the 'order' parameter.
+        order: list
+            The order of move types to generate. This should be a list containing
+            the move types as strings: "add", "swap", "doubleswap", "remove".
+            NOTE: If random_move_order is False, the order as specified in this list will
+            be used.
+            NOTE: Moves can be omitted by not including them in this list.
         """
-        bigger = self.random_state.choice([True, False]) #this is used to determine whether to swap with larger or smaller indices
-        
-        remaining_points = np.ones(self.num_points, dtype=bool) #this is used to keep track of which points are still available for moves
-        remaining_clusters = list(range(self.unique_clusters.shape[0])) #this is used to keep track of which clusters are still available for moves
-        
-        while remaining_clusters:
-            if random_cluster:
-                cluster_idx = self.random_state.choice(remaining_clusters)
-                # Pick a random remaining index from the cluster
-                point_idx = self.random_state.choice(np.where((self.clusters == cluster_idx) & remaining_points)[0])
+        generators = {}
+        # Add move types to generators dictionary
+        for move_type in order:
+            if move_type == "add":
+                generators[move_type] = self.generate_indices_add(random=random_index_order)
+            elif move_type == "swap":
+                generators[move_type] = self.generate_indices_swap(number_to_add=1, random=random_index_order)
+            elif move_type == "doubleswap":
+                generators[move_type] = self.generate_indices_swap(number_to_add=2, random=random_index_order)
+            elif move_type == "remove":
+                generators[move_type] = self.generate_indices_remove(random=random_index_order)
             else:
-                point_idx = self.random_state.choice(np.where(remaining_points)[0])
-                cluster_idx = self.clusters[point_idx]
-            remaining_points[point_idx] = False #mark this point as used
-            if self.selection[point_idx]: #if the point is selected
-                # Try removing if at least 1 other point also selected
-                if len(self.selection_per_cluster[cluster_idx]) > 1: #if there are more than one points in the cluster
-                    yield "remove", point_idx
-                # Try swapping with other unselected oints in this cluster
-                candidate_points = self.random_state.permutation(np.where((self.clusters == cluster_idx) & ~self.selection)[0])
-                for other_point in candidate_points:
-                    if (bigger and other_point > point_idx) or (not bigger and other_point < point_idx):
-                        yield "swap", (other_point, point_idx)
-                for other_points in itertools.combinations(candidate_points, 2):
-                    yield "doubleswap", (other_points, point_idx)
-            else: #if point not selected
-                # Try adding point to solution
-                yield "add", point_idx
-                for other_point in self.random_state.permutation(np.where((self.clusters == cluster_idx) & self.selection)[0]):
-                    if (bigger and other_point > point_idx) or (not bigger and other_point < point_idx):
-                        yield "swap", (point_idx, other_point)
-            if np.sum((self.clusters == cluster_idx) & remaining_points) == 0: #if no more points in this cluster, remove it from remaining clusters
-                remaining_clusters.remove(cluster_idx)
+                raise ValueError(f"Unknown move type: {move_type}")
+        active_generators = order.copy()
 
+        # While there are active generators, yield from them until exhausted
+        while active_generators:
+            if random_move_order:
+                selected_generator = self.random_state.choice(active_generators)
+            else:
+                selected_generator = active_generators[0]
+            # This try-except block allows to yield from generator, and if no more of the corresponding move, removes it from active generators
+            try:
+                yield selected_generator, next(generators[selected_generator])
+            except StopIteration:
+                active_generators.remove(selected_generator)
 
-        
-    
 """
 Here we define helper functions that can be used by the multiprocessing version of the local search.
 The key characteristic of these functions is that they do not rely on an explicit instance of the
