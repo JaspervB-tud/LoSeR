@@ -1503,23 +1503,41 @@ class Solution:
         finally:
             # Clean up shared memory if it was created
             if distances_shm:
-                distances_shm.close()
-                distances_shm.unlink()
+                try:
+                    distances_shm.close()
+                    distances_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for distances already unlinked, exiting as normal.", flush=True)
             if clusters_shm:
-                clusters_shm.close()
-                clusters_shm.unlink()
+                try:
+                    clusters_shm.close()
+                    clusters_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for clusters already unlinked, exiting as normal.", flush=True)
             if closest_distances_intra_shm:
-                closest_distances_intra_shm.close()
-                closest_distances_intra_shm.unlink()
+                try:
+                    closest_distances_intra_shm.close()
+                    closest_distances_intra_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest distances intra already unlinked, exiting as normal.", flush=True)
             if closest_points_intra_shm:
-                closest_points_intra_shm.close()
-                closest_points_intra_shm.unlink()
+                try:
+                    closest_points_intra_shm.close()
+                    closest_points_intra_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest points intra already unlinked, exiting as normal.", flush=True)
             if closest_distances_inter_shm:
-                closest_distances_inter_shm.close()
-                closest_distances_inter_shm.unlink()
+                try:
+                    closest_distances_inter_shm.close()
+                    closest_distances_inter_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest distances inter already unlinked, exiting as normal.", flush=True)
             if closest_points_inter_shm:
-                closest_points_inter_shm.close()
-                closest_points_inter_shm.unlink()
+                try:
+                    closest_points_inter_shm.close()
+                    closest_points_inter_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest points inter already unlinked, exiting as normal.", flush=True)
 
         return time_per_iteration, objectives
 
@@ -1527,6 +1545,7 @@ class Solution:
                            random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
                            batch_size: int = 1000, max_batches: int = 32, 
                            runtime_switch: float = 10.0,
+                           max_move_queue_size: int = 1000, min_doubleswaps: int = 1, decay_rate: float = 0.01, start_p: float = 0.5,
                            logging: bool = False, logging_frequency: int = 500,
                            ):
         """
@@ -1616,6 +1635,8 @@ class Solution:
         objectives = []
         solution_changed = False
         run_in_multiprocessing = False
+        recent_moves = deque(maxlen=max_move_queue_size) #used to track whether doubleswaps should be considered
+        check_doubleswap = True
 
         # Multiprocessing
         try:
@@ -1665,7 +1686,8 @@ class Solution:
                         solution_changed = False
                         run_in_multiprocessing = False 
 
-                        move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
+                        move_generator = self.generate_moves_biased(iteration, random_move_order=random_move_order, random_index_order=random_index_order, order=move_order,
+                                                                    decay_rate=decay_rate, start_p=start_p)
 
                         current_iteration_time = time.time() #This is for logging purposes and for adaptive mode tracking
                         move_counter = 0
@@ -1768,6 +1790,18 @@ class Solution:
                         if solution_changed: # If improvement is found, update solution
                             self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
                             iteration += 1 #update iteration count
+
+                            if check_doubleswap:
+                                recent_moves.append(move_type)
+                                if len(recent_moves) == max_move_queue_size:
+                                    num_doubleswaps = sum(1 for move in recent_moves if move == "doubleswap")
+                                    if num_doubleswaps < min_doubleswaps:
+                                        check_doubleswap = False
+                                        del recent_moves
+                                        move_order = [move for move in move_order if move != "doubleswap"]
+                                        if logging:
+                                            print(f"Disabled doubleswap moves after {iteration} iterations due to insufficient doubleswaps in the last {max_move_queue_size} moves.", flush=True)
+
                         else:
                             break
                                 
@@ -2022,7 +2056,7 @@ class Solution:
             except StopIteration:
                 active_generators.remove(selected_generator)
 
-    def generate_moves_biased(self, random_move_order: bool = True, random_index_order: bool = True, order=["add", "swap", "doubleswap", "remove"]):
+    def generate_moves_biased(self, iteration, random_move_order: bool = True, random_index_order: bool = True, order=["add", "swap", "doubleswap", "remove"], decay_rate=0.01, start_p=0.5):
         """
         Creates a generator that generates moves in a specific order, or
         random order.
@@ -2058,10 +2092,26 @@ class Solution:
                 raise ValueError(f"Unknown move type: {move_type}")
         active_generators = order.copy()
 
+        probabilities = np.zeros(len(active_generators), dtype=np.float64)
+        if "doubleswap" in active_generators:
+            p_doubleswap = 1/len(active_generators) + (start_p - 1/len(active_generators)) * np.exp(-decay_rate * iteration)
+            p_doubleswap = min(max(p_doubleswap, 0.0), 1.0)
+            remaining = 1.0 - p_doubleswap
+            doubleswap_index = active_generators.index("doubleswap")
+            for i in range(len(active_generators)):
+                if i != doubleswap_index:
+                    probabilities[i] = remaining / (len(active_generators) - 1)
+                else:
+                    probabilities[doubleswap_index] = p_doubleswap
+        else:
+            probabilities = np.ones(len(active_generators), dtype=np.float64) / len(active_generators)
+        
+
+
         # While there are active generators, yield from them until exhausted
         while active_generators:
             if random_move_order:
-                selected_generator = self.random_state.choice(active_generators)
+                selected_generator = self.random_state.choice(active_generators, p=probabilities)
             else:
                 selected_generator = active_generators[0]
             # This try-except block allows to yield from generator, and if no more of the corresponding move, removes it from active generators
@@ -2069,6 +2119,22 @@ class Solution:
                 yield selected_generator, next(generators[selected_generator])
             except StopIteration:
                 active_generators.remove(selected_generator)
+                probabilities = np.zeros(len(active_generators), dtype=np.float64)
+                if "doubleswap" in active_generators:
+                    if len(active_generators) > 1:
+                        p_doubleswap = 1/len(active_generators) + (start_p - 1/len(active_generators)) * np.exp(-decay_rate * iteration)
+                        p_doubleswap = min(max(p_doubleswap, 0.0), 1.0)  # Ensure p_doubleswap does not exceed 1
+                        remaining = 1.0 - p_doubleswap
+                        doubleswap_index = active_generators.index("doubleswap")
+                        for i in range(len(active_generators)):
+                            if i != doubleswap_index:
+                                probabilities[i] = remaining / (len(active_generators) - 1)
+                            else:
+                                probabilities[doubleswap_index] = p_doubleswap
+                    else:
+                        probabilities = np.array([1], dtype=np.float64)
+                else:
+                    probabilities = np.ones(len(active_generators), dtype=np.float64) / len(active_generators)
 
 """
 Here we define helper functions that can be used by the multiprocessing version of the local search.
