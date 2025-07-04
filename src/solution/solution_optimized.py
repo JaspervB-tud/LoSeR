@@ -9,7 +9,9 @@ import traceback
 from collections import deque
 
 # This is to define the precision threshold for floating point comparisons
-PRECISION_THRESHOLD = 1e-6
+PRECISION_THRESHOLD = 1e-10
+DISTANCE_DTYPE = np.float64
+AUXILIARY_DISTANCE_DTYPE = np.float64
 
 class Solution:
     def __init__(self, distances: np.ndarray, clusters: np.ndarray, selection=None, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
@@ -40,14 +42,14 @@ class Solution:
 
         # Initialize object attributes
         self.selection = selection.astype(dtype=bool)
-        self.distances = squareform(distances.astype(dtype=np.float32))
+        self.distances = squareform(distances.astype(dtype=DISTANCE_DTYPE))
         self.clusters = clusters.astype(dtype=np.int64)
         self.unique_clusters = np.unique(self.clusters)
         # Cost per cluster based on number of points in each cluster
         # If cost_per_cluster is True, then the cost is divided by the number of points in each cluster
         # cost_per_cluster is indexed by cluster indices
         self.selection_cost = selection_cost
-        self.cost_per_cluster = np.zeros(self.unique_clusters.shape[0], dtype=np.float64)
+        self.cost_per_cluster = np.zeros(self.unique_clusters.shape[0], dtype=AUXILIARY_DISTANCE_DTYPE)
         for cluster in self.unique_clusters:
             if cost_per_cluster == 0: #default behavior, set to selection cost
                 self.cost_per_cluster[cluster] = selection_cost
@@ -59,6 +61,12 @@ class Solution:
                 cluster_points = np.where(self.clusters == cluster)[0]
                 centroid = np.argmin(np.sum(distances[np.ix_(cluster_points, cluster_points)], axis=1))
                 self.cost_per_cluster[cluster] = np.mean(distances[centroid, cluster_points])
+            elif cost_per_cluster == -2:
+                # Define the average distance in a cluster as the average similarity
+                # of all points in the cluster to the centroid of the cluster.
+                cluster_points = np.where(self.clusters == cluster)[0]
+                centroid = np.argmin(np.sum(distances[np.ix_(cluster_points, cluster_points)], axis=1))
+                self.cost_per_cluster[cluster] = selection_cost * ( 1.0-np.mean(distances[centroid, cluster_points]) )
             elif cost_per_cluster == 3:
                 # Define the average distance in a cluster as the average distance
                 # of all points in the cluster to the closest point in the cluster.
@@ -149,10 +157,10 @@ class Solution:
         
         # Re-initialize the closest distances and points arrays and dicts
         # INTRA CLUSTER INFORMATION
-        self.closest_distances_intra = np.zeros(self.selection.shape[0], dtype=np.float32) #distances to closest selected point
+        self.closest_distances_intra = np.zeros(self.selection.shape[0], dtype=AUXILIARY_DISTANCE_DTYPE) #distances to closest selected point
         self.closest_points_intra = np.arange(0, self.selection.shape[0], dtype=np.int32) #indices of closest selected point
         # INTER CLUSTER INFORMATION
-        self.closest_distances_inter = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=np.float32) #distances to closest selected point
+        self.closest_distances_inter = np.zeros((self.unique_clusters.shape[0], self.unique_clusters.shape[0]), dtype=AUXILIARY_DISTANCE_DTYPE) #distances to closest selected point
         self.closest_points_inter = {pair: (None, None) for pair in itertools.combinations(self.unique_clusters, 2)} #indices of closest selected point
         """
         Interpretation of closest_points_inter_array: given a pair of clusters (cluster1, cluster2),
@@ -177,14 +185,14 @@ class Solution:
         # Intra cluster distance costs
         for cluster in self.unique_clusters:
             for idx in self.nonselection_per_cluster[cluster]:
-                cur_min = np.float32(np.inf)
+                cur_min = AUXILIARY_DISTANCE_DTYPE(np.inf)
                 cur_idx = None # index of the closest selected point of the same cluster
                 for other_idx in sorted(list(self.selection_per_cluster[cluster])): #this is to ensure consistent ordering
                     cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
                     if cur_dist < cur_min:
                         cur_min = cur_dist
                         cur_idx = other_idx
-                self.closest_distances_intra[idx] = np.float32(cur_min)
+                self.closest_distances_intra[idx] = AUXILIARY_DISTANCE_DTYPE(cur_min)
                 self.closest_points_intra[idx] = np.int32(cur_idx)
                 objective += cur_min
         # Inter cluster distance costs
@@ -204,6 +212,64 @@ class Solution:
             self.closest_points_inter_array[(cluster_2, cluster_1)] = cur_pair[0]
             objective += cur_max
         self.objective = objective
+
+    def decompose_objective(self, selection_cost: float):
+        """
+        Calculates the objective value of the solution decomposed into:
+            - selection cost
+            - intra cluster distance costs
+            - inter cluster distance costs
+        In addition, this method allows for another selection cost to be applied which
+        prevents having to re-initialize a Solution object
+        NOTE: If selection is not feasible, the objective value is set to np.inf
+        and some of the internal attributes will not be set.
+
+        Parameters:
+        -----------
+        selection_cost: float
+            The cost associated with selecting a point.
+            NOTE: for now this does not allow for custom definitions relating the selection
+            cost to the number of points in a cluster for example.
+
+        Returns:
+        --------
+        dict
+            A dictionary with the following keys:
+            - "selection": the total selection cost
+            - "intra": the total intra cluster distance cost
+            - "inter": the total inter cluster distance cost
+            If the solution is not feasible, returns None.
+        """
+        is_feasible = self.determine_feasibility()
+        cost = {
+            "selection": 0.0,
+            "intra": 0.0,
+            "inter": 0.0
+        }
+        if not is_feasible:
+            return None
+        # Selection costs
+        for idx in np.where(self.selection)[0]:
+            cost["selection"] += selection_cost
+        # Intra cluster distance costs
+        for cluster in self.unique_clusters:
+            for idx in self.nonselection_per_cluster[cluster]:
+                cur_min = AUXILIARY_DISTANCE_DTYPE(np.inf)
+                for other_idx in sorted(list(self.selection_per_cluster[cluster])): #this is to ensure consistent ordering
+                    cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
+                    if cur_dist < cur_min:
+                        cur_min = cur_dist
+                cost["intra"] += cur_min
+        # Inter cluster distance costs
+        for cluster_1, cluster_2 in itertools.combinations(self.unique_clusters, 2):
+            cur_max = -AUXILIARY_DISTANCE_DTYPE(np.inf)
+            for point_1 in sorted(list(self.selection_per_cluster[cluster_1])): #this is to ensure consistent ordering
+                for point_2 in sorted(list(self.selection_per_cluster[cluster_2])): #this is to ensure consistent ordering
+                    cur_dist = 1.0 - get_distance(point_1, point_2, self.distances, self.num_points)
+                    if cur_dist > cur_max:
+                        cur_max = cur_dist
+            cost["inter"] += cur_max
+        return cost
 
     @staticmethod
     def generate_centroid_solution(distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
@@ -1248,6 +1314,7 @@ class Solution:
                            random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
                            batch_size: int = 1000, max_batches: int = 32, 
                            runtime_switch: float = 10.0,
+                           dynamically_check: bool = False, max_move_queue_size: int = 1000, min_doubleswaps: int = 1, start_p: float = 0.25, decay_rate: float = 0.01,
                            logging: bool = False, logging_frequency: int = 500,
                            ):
         """
@@ -1299,304 +1366,24 @@ class Solution:
         runtime_switch: float
             Threshold in seconds for switching between single-core and multi-core 
             execution.
-        logging: bool
-            If True, information about the local search will be printed.
-        logging_frequency: int
-            If logging is True, information will be printed every
-            logging_frequency iterations.
-        
-        Returns:
-        --------
-        time_per_iteration: list of floats
-            The time taken for each iteration.
-            NOTE: this is primarily for logging purposes
-        objectives: list of floats
-            The objective value in each iteration.
-        """
-        # Validate input parameters
-        if not isinstance(max_iterations, int) or max_iterations < 1:
-            raise ValueError("max_iterations must be a positive integer.")
-        if not isinstance(num_cores, int) or num_cores < 2:
-            raise ValueError("num_cores must be a positive integer and larger than 1.")
-        if not isinstance(random_move_order, bool):
-            raise ValueError("random_move_order must be a boolean value.")
-        if not isinstance(random_index_order, bool):
-            raise ValueError("random_index_order must be a boolean value.")
-        if not isinstance(batch_size, int) or batch_size < 1:
-            raise ValueError("batch_size must be a positive integer.")
-        if not isinstance(max_batches, int) or max_batches < 1:
-            raise ValueError("max_batches must be a positive integer.")
-        if not isinstance(runtime_switch, (int, float)) or runtime_switch < 0:
-            raise ValueError("runtime_switch must be a non-negative number.")
-        if not self.feasible:
-            raise ValueError("The solution is infeasible, cannot perform local search.")
-
-        # Initialize variables
-        iteration = 0
-        time_per_iteration = []
-        objectives = []
-        solution_changed = False
-        run_in_multiprocessing = False
-
-        # Multiprocessing
-        try:
-            # Copy distance matrix to shared memory
-            distances_shm = shm.SharedMemory(create=True, size=self.distances.nbytes)
-            shared_distances = np.ndarray(self.distances.shape, dtype=self.distances.dtype, buffer=distances_shm.buf)
-            np.copyto(shared_distances, self.distances) #this array is static, only copy once
-            # Copy cluster assignment to shared memory
-            clusters_shm = shm.SharedMemory(create=True, size=self.clusters.nbytes)
-            shared_clusters = np.ndarray(self.clusters.shape, dtype=self.clusters.dtype, buffer=clusters_shm.buf)
-            np.copyto(shared_clusters, self.clusters) #this array is static, only copy once
-
-            # for the intra and inter distances, only copy them during iterations since they are updated during the local search
-            # Copy closest_distances_intra to shared memory
-            closest_distances_intra_shm = shm.SharedMemory(create=True, size=self.closest_distances_intra.nbytes)
-            shared_closest_distances_intra = np.ndarray(self.closest_distances_intra.shape, dtype=self.closest_distances_intra.dtype, buffer=closest_distances_intra_shm.buf)
-            # Copy closest_points_intra to shared memory
-            closest_points_intra_shm = shm.SharedMemory(create=True, size=self.closest_points_intra.nbytes)
-            shared_closest_points_intra = np.ndarray(self.closest_points_intra.shape, dtype=self.closest_points_intra.dtype, buffer=closest_points_intra_shm.buf)
-
-            # Copy closest_distances_inter to shared memory
-            closest_distances_inter_shm = shm.SharedMemory(create=True, size=self.closest_distances_inter.nbytes)
-            shared_closest_distances_inter = np.ndarray(self.closest_distances_inter.shape, dtype=self.closest_distances_inter.dtype, buffer=closest_distances_inter_shm.buf)
-            # Copy closest_points_inter to shared memory
-            closest_points_inter_shm = shm.SharedMemory(create=True, size=self.closest_points_inter_array.nbytes)
-            shared_closest_points_inter = np.ndarray(self.closest_points_inter_array.shape, dtype=self.closest_points_inter_array.dtype, buffer=closest_points_inter_shm.buf)
-
-            with Manager() as manager:
-                event = manager.Event() #this is used to signal when tasks should be stopped
-                results = manager.list() #this is used to store an improvement is one is found
-
-                with Pool(
-                    processes=num_cores,
-                    initializer=init_worker,
-                    initargs=(
-                        distances_shm.name, shared_distances.shape,
-                        clusters_shm.name, shared_clusters.shape,
-                        closest_distances_intra_shm.name, shared_closest_distances_intra.shape,
-                        closest_points_intra_shm.name, shared_closest_points_intra.shape,
-                        closest_distances_inter_shm.name, shared_closest_distances_inter.shape,
-                        closest_points_inter_shm.name, shared_closest_points_inter.shape,
-                        self.unique_clusters, self.cost_per_cluster, self.num_points
-                    ),
-                ) as pool:
-                    while iteration < max_iterations:
-                        objectives.append(self.objective)
-                        solution_changed = False
-                        run_in_multiprocessing = False 
-
-                        move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
-
-                        current_iteration_time = time.time() #This is for logging purposes and for adaptive mode tracking
-                        move_counter = 0
-                        for move_type, move_content in move_generator:
-                            move_counter += 1
-                            if move_type == "add":
-                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(move_content, local_search=True)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
-                                    solution_changed = True
-                                    break
-                            elif move_type == "swap":
-                                idx_to_add, idx_to_remove = move_content
-                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idx_to_add, idx_to_remove)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
-                                    solution_changed = True
-                                    break
-                            elif move_type == "doubleswap":
-                                idxs_to_add, idx_to_remove = move_content
-                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_doubleswap(idxs_to_add, idx_to_remove)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
-                                    solution_changed = True
-                                    break
-                            elif move_type == "remove":
-                                idx_to_remove = move_content
-                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
-                                if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
-                                    solution_changed = True
-                                    break
-                            if move_counter % 1_000: #every 1000 moves, check if we should switch to multiprocessing
-                                if time.time() - current_iteration_time > runtime_switch:
-                                    if logging:
-                                        print(f"Iteration {iteration+1} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
-                                    run_in_multiprocessing = True
-                                    break #break out of singleprocessing
-                            
-                        if run_in_multiprocessing: #If switching to multiprocessing
-                            # Start by updating shared memory arrays
-                            np.copyto(shared_closest_distances_intra, self.closest_distances_intra)
-                            np.copyto(shared_closest_points_intra, self.closest_points_intra)
-                            np.copyto(shared_closest_distances_inter, self.closest_distances_inter)
-                            np.copyto(shared_closest_points_inter, self.closest_points_inter_array)
-                            
-                            event.clear() #reset event for current iteration
-                            results = [] #resets results for current iteration
-
-                            num_solutions_tried = 0
-                            # Try moves in batches
-                            while True:
-                                batches = []
-                                num_this_loop = 0
-                                cur_batch_time = time.time()
-                                for _ in range(max_batches): #fill list with up to max_batches batches
-                                    batch = [] #batch of moves
-                                    try:
-                                        for _ in range(batch_size):
-                                            move_type, move_content = next(move_generator)
-                                            batch.append((move_type, move_content))
-                                    except StopIteration:
-                                        if len(batch) > 0:
-                                            batches.append(batch)
-                                            num_this_loop += len(batch)
-                                        break
-                                    if len(batch) > 0:
-                                        batches.append(batch)
-                                        num_this_loop += len(batch)
-
-                                # Process current collection of batches in parallel
-                                if len(batches) > 0:
-                                    batch_results = []
-                                    for batch in batches:
-                                        if event.is_set():
-                                            break
-                                        res = pool.apply_async(
-                                            process_batch,
-                                            args=(
-                                                batch, event, 
-                                                self.selection_per_cluster, self.nonselection_per_cluster,
-                                                self.objective
-                                            ),
-                                            callback = lambda result: process_batch_result(result, results)
-                                        )
-                                        batch_results.append(res)
-
-                                    for result in batch_results:
-                                        result.wait()
-
-                                    if len(results) > 0: #if improvement is found, stop processing batches
-                                        solution_changed = True
-                                        move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters = results[0]
-                                        break
-                                    else:
-                                        num_solutions_tried += num_this_loop
-                                        if logging:
-                                            print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
-
-                                else: # No more tasks to process, break while loop
-                                    break
-
-                        time_per_iteration.append(time.time() - current_iteration_time)
-                        if solution_changed: # If improvement is found, update solution
-                            self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
-                            iteration += 1 #update iteration count
-                        else:
-                            break
-                                
-                        if iteration % logging_frequency == 0 and logging:
-                            print(f"Iteration {iteration}: Objective = {self.objective:.6f}", flush=True)
-                            print(f"Average runtime last {logging_frequency} iterations: {np.mean(time_per_iteration[-logging_frequency:]):.6f} seconds", flush=True)
-        except Exception as e:
-            print(f"An error occurred during local search: {e}", flush=True)
-            print("Traceback details:", flush=True)
-            traceback.print_exc()
-            raise e
-        finally:
-            # Clean up shared memory if it was created
-            if distances_shm:
-                try:
-                    distances_shm.close()
-                    distances_shm.unlink()
-                except FileNotFoundError:
-                    print("Shared memory for distances already unlinked, exiting as normal.", flush=True)
-            if clusters_shm:
-                try:
-                    clusters_shm.close()
-                    clusters_shm.unlink()
-                except FileNotFoundError:
-                    print("Shared memory for clusters already unlinked, exiting as normal.", flush=True)
-            if closest_distances_intra_shm:
-                try:
-                    closest_distances_intra_shm.close()
-                    closest_distances_intra_shm.unlink()
-                except FileNotFoundError:
-                    print("Shared memory for closest distances intra already unlinked, exiting as normal.", flush=True)
-            if closest_points_intra_shm:
-                try:
-                    closest_points_intra_shm.close()
-                    closest_points_intra_shm.unlink()
-                except FileNotFoundError:
-                    print("Shared memory for closest points intra already unlinked, exiting as normal.", flush=True)
-            if closest_distances_inter_shm:
-                try:
-                    closest_distances_inter_shm.close()
-                    closest_distances_inter_shm.unlink()
-                except FileNotFoundError:
-                    print("Shared memory for closest distances inter already unlinked, exiting as normal.", flush=True)
-            if closest_points_inter_shm:
-                try:
-                    closest_points_inter_shm.close()
-                    closest_points_inter_shm.unlink()
-                except FileNotFoundError:
-                    print("Shared memory for closest points inter already unlinked, exiting as normal.", flush=True)
-
-        return time_per_iteration, objectives
-
-    def local_search_adaptive_experimental(self, max_iterations: int = 10_000, num_cores: int = 2,
-                           random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
-                           batch_size: int = 1000, max_batches: int = 32, 
-                           runtime_switch: float = 10.0,
-                           max_move_queue_size: int = 1000, min_doubleswaps: int = 1, decay_rate: float = 0.01, start_p: float = 0.5,
-                           logging: bool = False, logging_frequency: int = 500,
-                           ):
-        """
-        Perform local search to find a (local) optimal solution using an adaptive approach where
-        the search switches between single-core and multi-core execution based on the runtime of iterations.
-
-        Parameters:
-        max_iterations: int
-            The maximum number of iterations to perform.
-        num_cores: int
-            The number of cores to use for parallel processing.
-            NOTE: if set to 1, local search will always run in
-            single processor mode, even if hybrid is True.
-        hybrid: bool
-            If True, local search will switch to multiprocessing
-            after num_switch consecutive iterations take longer
-            than runtime_switch seconds.
-        random_move_order: bool
-            If True, the order of moves (add, swap, doubleswap,
-            remove) is randomized.
-        random_index_order: bool
-            If True, the order of indices for moves is randomized.
-            NOTE: if random_move_order is True, but this is false,
-            all moves of a particular type will be tried before
-            moving to the next move type, but the order of moves
-            is random).
-        move_order: list
-            If provided, this list will be used to determine the
-            order of moves. If random_move_order is True, this
-            list will be shuffled before use.
-            NOTE: this list should contain the following move types (as strings):
-                - "add"
-                - "swap"
-                - "doubleswap"
-                - "remove"
-            NOTE: by leaving out a move type, it will not be
-            considered in the local search.
-        batch_size: int
-            In multiprocessing mode, moves are processed in batches
-            of this size.
-            NOTE: do not set this to a value smaller than 0
-        max_batches: int
-            To prevent memory issues, the number of batches is
-            limited to this value. Once every batch has been
-            processed, the next set of batches will be
-            processed.
-            NOTE: this should be set to at least the number of
-            num_cores, otherwise some cores will be idle.
-        runtime_switch: float
-            Threshold in seconds for switching between single-core and multi-core 
-            execution.
+        dynamically_check: bool
+            If True, doubleswaps will be dynamically checked based on the recent moves,
+            and will be omitted if not performed frequently enough.
+            NOTE: If set to false, doubleswaps will always be checked
+            and all moves are assigned equal probability.
+        max_move_queue_size: int
+            The maximum number of moves to keep track of in the recent moves queue.
+        min_doubleswaps: int
+            The minimum number of doubleswaps in the last max_move_queue_size moves
+            before doubleswaps are omitted.
+        start_p: float
+            The starting probability for testing a doubleswap move.
+            NOTE: This probability should be larger than 1/4 to ensure that
+            doubleswaps are test enough to conclude that they can be
+            omitted.
+        decay_rate: float
+            The rate at which the probability for testing a doubleswap move decays.
+            NOTE: This should be a small positive number, e.g. 0.01.
         logging: bool
             If True, information about the local search will be printed.
         logging_frequency: int
@@ -1686,8 +1473,11 @@ class Solution:
                         solution_changed = False
                         run_in_multiprocessing = False 
 
-                        move_generator = self.generate_moves_biased(iteration, random_move_order=random_move_order, random_index_order=random_index_order, order=move_order,
+                        if dynamically_check:
+                            move_generator = self.generate_moves_biased(iteration, random_move_order=random_move_order, random_index_order=random_index_order, order=move_order,
                                                                     decay_rate=decay_rate, start_p=start_p)
+                        else:
+                            move_generator = self.generate_moves(random_move_order=random_move_order, random_index_order=random_index_order, order=move_order)
 
                         current_iteration_time = time.time() #This is for logging purposes and for adaptive mode tracking
                         move_counter = 0
@@ -1791,7 +1581,7 @@ class Solution:
                             self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
                             iteration += 1 #update iteration count
 
-                            if check_doubleswap:
+                            if check_doubleswap and dynamically_check:
                                 recent_moves.append(move_type)
                                 if len(recent_moves) == max_move_queue_size:
                                     num_doubleswaps = sum(1 for move in recent_moves if move == "doubleswap")
@@ -1816,23 +1606,41 @@ class Solution:
         finally:
             # Clean up shared memory if it was created
             if distances_shm:
-                distances_shm.close()
-                distances_shm.unlink()
+                try:
+                    distances_shm.close()
+                    distances_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for distances already unlinked, exiting as normal.", flush=True)
             if clusters_shm:
-                clusters_shm.close()
-                clusters_shm.unlink()
+                try:
+                    clusters_shm.close()
+                    clusters_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for clusters already unlinked, exiting as normal.", flush=True)
             if closest_distances_intra_shm:
-                closest_distances_intra_shm.close()
-                closest_distances_intra_shm.unlink()
+                try:
+                    closest_distances_intra_shm.close()
+                    closest_distances_intra_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest distances intra already unlinked, exiting as normal.", flush=True)
             if closest_points_intra_shm:
-                closest_points_intra_shm.close()
-                closest_points_intra_shm.unlink()
+                try:
+                    closest_points_intra_shm.close()
+                    closest_points_intra_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest points intra already unlinked, exiting as normal.", flush=True)
             if closest_distances_inter_shm:
-                closest_distances_inter_shm.close()
-                closest_distances_inter_shm.unlink()
+                try:
+                    closest_distances_inter_shm.close()
+                    closest_distances_inter_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest distances inter already unlinked, exiting as normal.", flush=True)
             if closest_points_inter_shm:
-                closest_points_inter_shm.close()
-                closest_points_inter_shm.unlink()
+                try:
+                    closest_points_inter_shm.close()
+                    closest_points_inter_shm.unlink()
+                except FileNotFoundError:
+                    print("Shared memory for closest points inter already unlinked, exiting as normal.", flush=True)
 
         return time_per_iteration, objectives
 
@@ -2432,19 +2240,19 @@ def init_worker(
 
     global _distances_shm, _distances
     _distances_shm = shm.SharedMemory(name=distances_name)
-    _distances = np.ndarray(distances_shape, dtype=np.float32, buffer=_distances_shm.buf)
+    _distances = np.ndarray(distances_shape, dtype=DISTANCE_DTYPE, buffer=_distances_shm.buf)
     global _clusters_shm, _clusters
     _clusters_shm = shm.SharedMemory(name=clusters_name)
     _clusters = np.ndarray(clusters_shape, dtype=np.int64, buffer=_clusters_shm.buf)
     global _closest_distances_intra_shm, _closest_distances_intra
     _closest_distances_intra_shm = shm.SharedMemory(name=closest_distances_intra_name)
-    _closest_distances_intra = np.ndarray(closest_distances_intra_shape, dtype=np.float32, buffer=_closest_distances_intra_shm.buf)
+    _closest_distances_intra = np.ndarray(closest_distances_intra_shape, dtype=DISTANCE_DTYPE, buffer=_closest_distances_intra_shm.buf)
     global _closest_points_intra_shm, _closest_points_intra
     _closest_points_intra_shm = shm.SharedMemory(name=closest_points_intra_name)
     _closest_points_intra = np.ndarray(closest_points_intra_shape, dtype=np.int32, buffer=_closest_points_intra_shm.buf)
     global _closest_distances_inter_shm, _closest_distances_inter
     _closest_distances_inter_shm = shm.SharedMemory(name=closest_distances_inter_name)
-    _closest_distances_inter = np.ndarray(closest_distances_inter_shape, dtype=np.float32, buffer=_closest_distances_inter_shm.buf)
+    _closest_distances_inter = np.ndarray(closest_distances_inter_shape, dtype=DISTANCE_DTYPE, buffer=_closest_distances_inter_shm.buf)
     global _closest_points_inter_shm, _closest_points_inter
     _closest_points_inter_shm = shm.SharedMemory(name=closest_points_inter_name)
     _closest_points_inter = np.ndarray(closest_points_inter_shape, dtype=np.int32, buffer=_closest_points_inter_shm.buf)
