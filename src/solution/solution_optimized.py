@@ -271,8 +271,8 @@ class Solution:
             cost["inter"] += cur_max
         return cost
 
-    @staticmethod
-    def generate_centroid_solution(distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
+    @classmethod
+    def generate_centroid_solution(cls, distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
         """
         Generates a Solution object with an initial solution by selecting the centroid for every cluster.
 
@@ -317,10 +317,10 @@ class Solution:
             centroid = np.argmin(np.sum(cluster_distances, axis=1))
             selection[cluster_points[centroid]] = True
 
-        return Solution(distances, clusters, selection=selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=seed)
+        return cls(distances, clusters, selection=selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=seed)
     
-    @staticmethod
-    def generate_random_solution(distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, max_fraction=0.1, seed=None):
+    @classmethod
+    def generate_random_solution(cls, distances, clusters, selection_cost: float = 1.0, cost_per_cluster: int = 0, max_fraction=0.1, seed=None):
         """
         Generates a Solution object with an initial solution by randomly selecting points.
 
@@ -382,7 +382,7 @@ class Solution:
         additional_points = random_state.choice(remaining_points, size=num_additional_points, replace=False)
         selection[additional_points] = True
 
-        return Solution(distances, clusters, selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=random_state)
+        return cls(distances, clusters, selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=random_state)
 
     def evaluate_add(self, idx_to_add, local_search=False):
         """
@@ -1944,6 +1944,392 @@ class Solution:
                 else:
                     probabilities = np.ones(len(active_generators), dtype=np.float64) / len(active_generators)
 
+class SolutionAverage(Solution):
+    """
+    A specialized version of the Solution class that calculates inter-cluster distances
+    as the average of similarities between cluster representatives of different clusters.
+    This is an experimental version and may not be suitable for all use cases.
+    """
+    def __init__(self, distances: np.ndarray, clusters: np.ndarray, selection=None, selection_cost: float = 1.0, cost_per_cluster: int = 0, seed=None):
+        # Assert that distances and clusters have the same number of rows
+        if distances.shape[0] != clusters.shape[0]:
+            raise ValueError("Number of points is different between distances and clusters.")
+        # Assert that distances are in [0,1] (i.e. distances are similarities or dissimilarities)
+        if not np.all((distances >= 0) & (distances <= 1)):
+            raise ValueError("Distances must be in the range [0, 1].")
+        # If selection is provided, check if it meets criteria
+        if selection is not None:
+            # Assert that selection has the same number of points as clusters
+            if selection.shape != clusters.shape:
+                raise ValueError("Selection must have the same number of points as clusters.")
+            # Assert that selection is a numpy array of booleans
+            if not isinstance(selection, np.ndarray) or selection.dtype != bool:
+                raise TypeError("Selection must be a numpy array of booleans.")
+        else:
+            selection = np.zeros(clusters.shape[0], dtype=bool)
+
+        # Set random state for reproducibility
+        if isinstance(seed, int):
+            self.random_state = np.random.RandomState(seed)
+        elif isinstance(seed, np.random.RandomState):
+            self.random_state = seed
+        else:
+            self.random_state = np.random.RandomState()
+
+        # Initialize object attributes
+        self.selection = selection.astype(dtype=bool)
+        self.distances = squareform(distances.astype(dtype=DISTANCE_DTYPE))
+        self.clusters = clusters.astype(dtype=np.int64)
+        self.unique_clusters = np.unique(self.clusters)
+        # Cost per cluster based on number of points in each cluster
+        # If cost_per_cluster is True, then the cost is divided by the number of points in each cluster
+        # cost_per_cluster is indexed by cluster indices
+        self.selection_cost = selection_cost
+        self.cost_per_cluster = np.zeros(self.unique_clusters.shape[0], dtype=AUXILIARY_DISTANCE_DTYPE)
+        for cluster in self.unique_clusters:
+            if cost_per_cluster == 0: #default behavior, set to selection cost
+                self.cost_per_cluster[cluster] = selection_cost
+            elif cost_per_cluster == 1: #set to 1 / number of points in cluster
+                self.cost_per_cluster[cluster] = selection_cost / np.sum(self.clusters == cluster)
+            elif cost_per_cluster == 2:
+                # Define the average distance in a cluster as the average distance
+                # of all points in the cluster to the centroid of the cluster.
+                cluster_points = np.where(self.clusters == cluster)[0]
+                centroid = np.argmin(np.sum(distances[np.ix_(cluster_points, cluster_points)], axis=1))
+                self.cost_per_cluster[cluster] = np.mean(distances[centroid, cluster_points])
+            elif cost_per_cluster == -2:
+                # Define the average distance in a cluster as the average similarity
+                # of all points in the cluster to the centroid of the cluster.
+                cluster_points = np.where(self.clusters == cluster)[0]
+                centroid = np.argmin(np.sum(distances[np.ix_(cluster_points, cluster_points)], axis=1))
+                self.cost_per_cluster[cluster] = selection_cost * ( 1.0-np.mean(distances[centroid, cluster_points]) )
+            elif cost_per_cluster == 3:
+                # Define the average distance in a cluster as the average distance
+                # of all points in the cluster to the closest point in the cluster.
+                cluster_points = np.where(self.clusters == cluster)[0]
+                self.cost_per_cluster[cluster] = np.mean([np.min(distances[point, cluster_points]) for point in cluster_points])
+        self.num_points = distances.shape[0]
+        self.num_clusters = self.unique_clusters.shape[0]
+
+        # Process initial representation to optimize for comparisons speed
+        self.points_per_cluster = {cluster: set(np.where(self.clusters == cluster)[0]) for cluster in self.unique_clusters} #points in every cluster
+
+        self.calculate_objective()
+
+    def calculate_objective(self):
+        """
+        Calculates the objective value of the solution, as well as set all the
+        inter and intra cluster distances and points.
+        NOTE: If selection is not feasible, the objective value is set to np.inf
+        and some of the internal attributes will not be set.
+        """
+        # Re-determine the selected and unselected points for every cluster
+        self.selection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & self.selection)[0]) for cluster in self.unique_clusters} #selected points in every cluster
+        self.nonselection_per_cluster = {cluster: set(np.where((self.clusters == cluster) & ~self.selection)[0]) for cluster in self.unique_clusters} #unselected points in every cluster
+        
+        # Re-initialize the closest distances and points arrays and dicts
+        # INTRA CLUSTER INFORMATION
+        self.closest_distances_intra = np.zeros(self.selection.shape[0], dtype=AUXILIARY_DISTANCE_DTYPE) #distances to closest selected point
+        self.closest_points_intra = np.arange(0, self.selection.shape[0], dtype=np.int32) #indices of closest selected point
+        # INTER CLUSTER INFORMATION
+        self.sum_distances_inter = np.zeros(int(self.unique_clusters.shape[0] * (self.unique_clusters.shape[0] - 1) / 2), dtype=AUXILIARY_DISTANCE_DTYPE)
+
+        is_feasible = self.determine_feasibility()
+        if not is_feasible:
+            self.feasible = False
+            self.objective = np.inf
+            print("The solution is infeasible, objective value is set to INF and the closest distances & points are not set.")
+            return self.objective
+        self.feasible = True
+
+        # Calculate the objective value
+        objective = 0.0
+        objective_components = {
+            "selection": 0.0,
+            "intra-cluster": 0.0,
+            "inter-cluster": 0.0,
+        } #maintain components of objective since inter-cluster component needs to be recalibrated from time to time?
+        # Selection cost
+        for idx in np.where(self.selection)[0]:
+            objective += self.cost_per_cluster[self.clusters[idx]]
+            objective_components["selection"] += self.cost_per_cluster[self.clusters[idx]]
+        # Intra cluster distance costs
+        for cluster in self.unique_clusters:
+            for idx in self.nonselection_per_cluster[cluster]:
+                cur_min = AUXILIARY_DISTANCE_DTYPE(np.inf)
+                cur_idx = None # index of the closest selected point of the same cluster
+                for other_idx in sorted(list(self.selection_per_cluster[cluster])): #this is to ensure consistent ordering
+                    cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
+                    if cur_dist < cur_min:
+                        cur_min = cur_dist
+                        cur_idx = other_idx
+                self.closest_distances_intra[idx] = AUXILIARY_DISTANCE_DTYPE(cur_min)
+                self.closest_points_intra[idx] = np.int32(cur_idx)
+                objective += cur_min
+                objective_components["intra-cluster"] += cur_min
+        # Inter cluster distance costs
+        for cluster_1, cluster_2 in itertools.combinations(self.unique_clusters, 2):
+            cur_inter_cost = 0.0
+            tot_pairs = 0
+            for point_1 in sorted(list(self.selection_per_cluster[cluster_1])): #this is to ensure consistent ordering
+                for point_2 in sorted(list(self.selection_per_cluster[cluster_2])): #this is to ensure consistent ordering
+                    cur_inter_cost += 1.0 - get_distance(point_1, point_2, self.distances, self.num_points)
+                    tot_pairs += 1
+            self.sum_distances_inter[get_index(cluster_1, cluster_2, self.num_clusters)] = AUXILIARY_DISTANCE_DTYPE(cur_inter_cost)
+            objective += cur_inter_cost/tot_pairs
+            objective_components["inter-cluster"] += cur_inter_cost/tot_pairs
+
+
+        self.objective = objective
+        self.objective_components = objective_components
+
+        return objective
+
+    def evaluate_add(self, idx_to_add: int, local_search=False):
+        """
+        Evaluates the effect of adding an unselected point to the solution.
+
+        Parameters:
+        -----------
+        idx_to_add: int
+            The index of the point to be added.
+        local_search: bool
+            If True, the method will return (np.inf, None, None) if the candidate objective
+            is worse than the current objective, allowing for local search to skip unnecessary evaluations.
+            If False, it will always evaluate the addition.
+        
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+            NOTE: If local_search is True, the returned value can be np.inf if
+            the candidate objective is worse than the current objective based
+            on intra distances.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(other_cluster_index, new_sum_distance)]
+        """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot evaluate addition.")
+        if self.selection[idx_to_add]:
+            raise ValueError("The point to add must not be selected.")
+        cluster = self.clusters[idx_to_add]
+        candidate_objective = self.objective + self.cost_per_cluster[cluster] # cost for adding the point
+
+        # Calculate intra cluster distances for cluster of new point
+        add_within_cluster = [] #this stores changes that have to be made if the objective improves
+        for idx in self.nonselection_per_cluster[cluster]:
+            cur_dist = get_distance(idx, idx_to_add, self.distances, self.num_points) # distance to current point (idx)
+            if cur_dist < self.closest_distances_intra[idx]:
+                candidate_objective += cur_dist - self.closest_distances_intra[idx]
+                add_within_cluster.append((idx, cur_dist))
+
+        # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
+        if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > PRECISION_THRESHOLD and local_search:
+            return np.inf, None, None
+
+        # Inter cluster distances for other clusters
+        add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
+        for other_cluster in self.unique_clusters:
+            if other_cluster != cluster:
+                old_sum = get_distance(cluster, other_cluster, self.sum_distances_inter, self.num_clusters)
+                old_num_pairs = len(self.selection_per_cluster[other_cluster]) * len(self.selection_per_cluster[cluster])
+                new_sum = old_sum 
+                new_num_pairs = old_num_pairs
+
+                # Batching
+                similarities = [
+                    1 - get_distance(idx, idx_to_add, self.distances, self.num_points)
+                    for idx in self.selection_per_cluster[other_cluster]
+                ]
+                new_sum += sum(similarities)
+                new_num_pairs += len(similarities)
+        
+                candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs) #change in objective
+                add_for_other_clusters.append((other_cluster, new_sum))
+                
+
+        return candidate_objective, add_within_cluster, add_for_other_clusters
+
+    def accept_add(self, idx_to_add: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
+        """
+        Accepts the addition of a point to the solution.
+        NOTE: this assumes that the initial solution
+        was feasible.
+
+        PARAMETERS:
+        -----------
+        idx_to_add: int
+            The index of the point to be added.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_sum_distance)]
+        """
+        cluster = self.clusters[idx_to_add]
+        # Update selected points
+        self.selection[idx_to_add] = True
+        self.selection_per_cluster[cluster].add(idx_to_add)
+        self.nonselection_per_cluster[cluster].remove(idx_to_add) #explicitly remove instead of discard since it should throw an error if not selected
+        # Update intra cluster distances (add_within_cluster)
+        for idx, dist in add_within_cluster:
+            self.closest_distances_intra[idx] = dist
+            self.closest_points_intra[idx] = idx_to_add
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, new_sum in add_for_other_clusters:
+            self.sum_distances_inter[get_index(cluster, other_cluster, self.num_clusters)] = new_sum
+        # Update objective value
+        self.objective = candidate_objective
+
+    def evaluate_swap(self, idxs_to_add, idx_to_remove: int):
+        """
+        Evaluates the effect of swapping a selected point for a pair of 
+        unselected points in the solution.
+
+        Parameters:
+        -----------
+        idxs_to_add: tuple of int or list of int
+            A tuple containing the indices of the two points to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(other_cluster_index, new_sum_distance)]
+        """
+        if not self.feasible:
+            raise ValueError("The solution is infeasible, cannot evaluate addition.")
+        try:
+            num_to_add = len(idxs_to_add)
+        except TypeError: #assumption is that this is an int
+            num_to_add = 1
+            idxs_to_add = [idxs_to_add]
+        for idx in idxs_to_add:
+            if self.selection[idx]:
+                raise ValueError("The points to add must not be selected.")
+        if not self.selection[idx_to_remove]:
+            raise ValueError("The point to remove must be selected.")
+        cluster = self.clusters[idx_to_remove]
+        for idx in idxs_to_add:
+            if self.clusters[idx] != cluster:
+                raise ValueError("All points must be in the same cluster.")
+            
+        candidate_objective = self.objective + (num_to_add - 1) * self.cost_per_cluster[cluster]
+        # Generate pool of alternative points to compare to
+        new_selection = set(self.selection_per_cluster[cluster])
+        for idx in idxs_to_add:
+            new_selection.add(idx)
+        new_selection.remove(idx_to_remove)
+        new_nonselection = set(self.nonselection_per_cluster[cluster])
+        new_nonselection.add(idx_to_remove)
+
+        # Calculate intra cluster distances for cluster of new point
+        #   - check if removed point was closest selected point for any of the unselected points -> if so, replace with new point
+        #   - check if added point is closest selected point for any of the unselected points -> if so, replace
+        add_within_cluster = []
+        for idx in new_nonselection:
+            cur_closest_distance = self.closest_distances_intra[idx]
+            cur_closest_point = self.closest_points_intra[idx]
+            if cur_closest_point == idx_to_remove:
+                cur_closest_distance = np.inf
+                for other_idx in new_selection:
+                    cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
+                    if cur_dist < cur_closest_distance:
+                        cur_closest_distance = cur_dist
+                        cur_closest_point = other_idx
+                candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
+                add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
+            else: #point to be removed is not closest, check if one of newly added points is closer
+                cur_dists = [(get_distance(idx, idx_to_add, self.distances, self.num_points), idx_to_add) for idx_to_add in idxs_to_add]
+                cur_dist, idx_to_add = min(cur_dists, key=lambda x: x[0])
+                if cur_dist < cur_closest_distance:
+                    candidate_objective += cur_dist - cur_closest_distance
+                    add_within_cluster.append((idx, idx_to_add, cur_dist))
+
+        # Calculate inter cluster distances for all other clusters
+        add_for_other_clusters = [] 
+        for other_cluster in self.unique_clusters:
+            if other_cluster != cluster:
+                old_sum = get_distance(cluster, other_cluster, self.sum_distances_inter, self.num_clusters)
+                old_num_pairs = len(self.selection_per_cluster[other_cluster]) * len(self.selection_per_cluster[cluster])
+                new_sum = old_sum 
+                new_num_pairs = old_num_pairs
+
+                similarities_add = [
+                    1.0 - get_distance(idx, idx_to_add, self.distances, self.num_points) for idx_to_add in idxs_to_add
+                    for idx in self.selection_per_cluster[other_cluster]
+                ]
+                similarities_remove = [
+                    1.0 - get_distance(idx, idx_to_remove, self.distances, self.num_points)
+                    for idx in self.selection_per_cluster[other_cluster]
+                ]
+                new_sum += sum(similarities_add) - sum(similarities_remove)
+                new_num_pairs += len(similarities_add) - len(similarities_remove)
+                candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs) #change in objective
+                add_for_other_clusters.append((other_cluster, new_sum))
+
+        return candidate_objective, add_within_cluster, add_for_other_clusters
+
+    def accept_swap(self, idxs_to_add, idx_to_remove: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
+        """
+        Accepts the swap of the pair of points in the solution.
+        NOTE: this assumes that the initial solution
+        was feasible.
+
+        PARAMETERS:
+        -----------
+        idxs_to_add: int or list of int
+            The index or indices of the point(s) to be added.
+        idx_to_remove: int
+            The index of the point to be removed.
+        candidate_objective: float
+            The objective value of the solution after the addition.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(other_cluster_index, new_sum_distance)]
+        """
+        try:
+            num_to_add = len(idxs_to_add)
+        except TypeError: #assumption is that this is an int
+            num_to_add = 1
+            idxs_to_add = [idxs_to_add]
+        cluster = self.clusters[idx_to_remove]
+        for idx_to_add in idxs_to_add:
+            self.selection[idx_to_add] = True
+            self.selection_per_cluster[cluster].add(idx_to_add)
+            self.nonselection_per_cluster[cluster].remove(idx_to_add)
+        self.selection[idx_to_remove] = False
+        self.selection_per_cluster[cluster].remove(idx_to_remove)
+        self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        # Update intra cluster distances (add_within_cluster)
+        for idx, new_closest_point, new_distance in add_within_cluster:
+            self.closest_distances_intra[idx] = new_distance
+            self.closest_points_intra[idx] = new_closest_point
+        # Update inter cluster distances (add_for_other_clusters)
+        for other_cluster, new_sum in add_for_other_clusters:
+            self.sum_distances_inter[get_index(cluster, other_cluster, self.num_clusters)] = new_sum
+        # Update objective value
+        self.objective = candidate_objective
+
+    
+
 """
 Here we define helper functions that can be used by the multiprocessing version of the local search.
 The key characteristic of these functions is that they do not rely on an explicit instance of the
@@ -2005,6 +2391,71 @@ def evaluate_add_mp(
                     #candidate_objective += cur_max - get_distance(cluster, other_cluster, _closest_distances_inter, _unique_clusters.shape[0])
                     candidate_objective += cur_max - _closest_distances_inter[cluster, other_cluster]
                     add_for_other_clusters.append((other_cluster, cur_max, cur_idx))
+
+        if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
+            return candidate_objective, add_within_cluster, add_for_other_clusters
+        else:
+            return -1, -1, -1  # -1, -1, -1 to signify no improvement
+        
+def evaluate_add_mp_avg(
+        idx_to_add: int, objective: float,
+        selection_per_cluster: dict, nonselection: set
+        ):
+        """
+        Evaluates the effect of adding an unselected point to the solution.
+        NOTE: this function relies on shared memory, as well as existing variables that
+        have to be initialized (those starting with an underscore) when spawning a worker 
+        process!
+        NOTE: in the current implementation, there is no check for feasibility, so it is assumed
+        that the point can be added without violating any constraints!
+        NOTE: this version is specifically intended for solution objects that
+        use the "average" costs for inter-cluster distances!
+
+        Parameters:
+        -----------
+        idx_to_add: int
+            The index of the point to be added.
+        objective: float
+            The current objective value of the solution.
+        selection_per_cluster: dict
+            A dictionary mapping cluster indices to sets of selected point indices in that cluster.
+        nonselection: set
+            A set of indices of points (in the cluster of the point to be added) that are currently 
+            not selected in the solution.
+        """
+        cluster = _clusters[idx_to_add]
+        candidate_objective = objective + _cost_per_cluster[cluster] # cost for adding the point
+        
+        # Intra cluster distances for same cluster
+        add_within_cluster = [] #this stores changes that have to be made if the objective improves
+        for idx in nonselection:
+            cur_dist = get_distance(idx, idx_to_add, _distances, _num_points) # distance to current point (idx)
+            if cur_dist < _closest_distances_intra[idx]:
+                candidate_objective += cur_dist - _closest_distances_intra[idx]
+                add_within_cluster.append((idx, cur_dist))
+
+        # Inter cluster distances for other clusters
+        # NOTE: This can only increase the inter cluster cost, so if objective is already worse, we can skip this
+        add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
+        if candidate_objective > objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
+            return -1, -1, -1 #-1, -1, -1 to signify no improvement
+        
+        for other_cluster in _unique_clusters:
+            if other_cluster != cluster:
+                old_sum = get_distance(cluster, other_cluster, _sum_distances_inter, _num_clusters)
+                old_num_pairs = len(selection_per_cluster[other_cluster]) * len(selection_per_cluster[cluster])
+                new_sum = old_sum 
+                new_num_pairs = old_num_pairs
+
+                similarities = [
+                    1 - get_distance(idx, idx_to_add, _distances, _num_points)
+                    for idx in selection_per_cluster[other_cluster]
+                ]
+                new_sum += sum(similarities)
+                new_num_pairs += len(similarities)
+
+                candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs)
+                add_for_other_clusters.append((other_cluster, new_sum))
 
         if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
             return candidate_objective, add_within_cluster, add_for_other_clusters
@@ -2105,6 +2556,96 @@ def evaluate_swap_mp(
                 if cur_closest_pair[0] > -1:
                     candidate_objective += cur_closest_similarity - _closest_distances_inter[cluster, other_cluster]
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
+    if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
+        return candidate_objective, add_within_cluster, add_for_other_clusters
+    else:
+        return -1, -1, -1  # -1, -1, -1 to signify no improvement
+
+def evaluate_swap_mp_avg(
+        idxs_to_add, idx_to_remove: int, objective: float,
+        selection_per_cluster: dict, nonselection: set):
+    """
+    Evaluates the effect of swapping a selected point for an unselected point (or multiple)
+    in the solution.
+    NOTE: this function relies on shared memory, as well as existing variables that
+    have to be initialized (those starting with an underscore) when spawning a worker
+    process!
+    NOTE: in the current implementation, there is no check for feasibility, so it is assumed
+    that the swap can be performed without violating any constraints!
+    
+    Parameters:
+    -----------
+    idxs_to_add: int or list of int
+        The index or indices of the point(s) to be added.
+    idx_to_remove: int
+        The index of the point to be removed.
+    objective: float
+        The current objective value of the solution.
+    selection_per_cluster: dict
+        A dictionary mapping cluster indices to sets of selected point indices in that cluster.
+    nonselection: set
+        A set of indices of points (in the cluster of the point to be removed) that are currently 
+        not selected in the solution.
+    """
+    try:
+        num_to_add = len(idxs_to_add)
+    except TypeError:
+        num_to_add = 1
+        idxs_to_add = [idxs_to_add]
+    cluster = _clusters[idx_to_remove]
+    candidate_objective = objective + (num_to_add - 1) * _cost_per_cluster[cluster] # cost for adding and removing
+    # Generate pool of alternative points to compare to
+    new_selection = set(selection_per_cluster[cluster])
+    for idx in idxs_to_add:
+        new_selection.add(idx)
+    new_selection.remove(idx_to_remove)
+    new_nonselection = set(nonselection)
+    new_nonselection.add(idx_to_remove)
+
+    # Calculate intra cluster distances for cluster of new point
+    add_within_cluster = []
+    for idx in new_nonselection:
+        cur_closest_distance = _closest_distances_intra[idx]
+        cur_closest_point = _closest_points_intra[idx]
+        if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
+            cur_closest_distance = np.inf
+            for other_idx in new_selection:
+                cur_dist = get_distance(idx, other_idx, _distances, _num_points)
+                if cur_dist < cur_closest_distance:
+                    cur_closest_distance = cur_dist
+                    cur_closest_point = other_idx
+            candidate_objective += cur_closest_distance - _closest_distances_intra[idx]
+            add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
+        else: #point to be removed is not closest, check if newly added point is closer
+            cur_dists = [(get_distance(idx, idx_to_add, _distances, _num_points), idx_to_add) for idx_to_add in idxs_to_add]
+            cur_dist, idx_to_add = min(cur_dists, key = lambda x: x[0])
+            if cur_dist < cur_closest_distance:
+                candidate_objective += cur_dist - cur_closest_distance
+                add_within_cluster.append((idx, idx_to_add, cur_dist))
+
+    # Calculate inter cluster distances for all other clusters
+    add_for_other_clusters = []
+    for other_cluster in _unique_clusters:
+        if other_cluster != cluster:
+            old_sum = get_distance(cluster, other_cluster, _sum_distances_inter, _num_clusters)
+            old_num_pairs = len(selection_per_cluster[other_cluster]) * len(selection_per_cluster[cluster])
+            new_sum = old_sum
+            new_num_pairs = old_num_pairs
+
+            # Batching
+            similarities_add = [
+                1.0 - get_distance(idx, idx_to_add, _distances, _num_points) for idx_to_add in idxs_to_add
+                for idx in selection_per_cluster[other_cluster]
+            ]
+            similarities_remove = [
+                1.0 - get_distance(idx, idx_to_remove, _distances, _num_points)
+                for idx in selection_per_cluster[other_cluster]
+            ]
+            new_sum += sum(similarities_add) - sum(similarities_remove)
+            new_num_pairs += len(similarities_add) - len(similarities_remove)
+            candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs) #change in objective
+            add_for_other_clusters.append((other_cluster, new_sum))
+
     if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
         return candidate_objective, add_within_cluster, add_for_other_clusters
     else:
@@ -2270,6 +2811,88 @@ def init_worker(
             _closest_points_intra_shm.close()
             _closest_distances_inter_shm.close()
             _closest_points_inter_shm.close()
+        except Exception as e:
+            print(f"Error closing shared memory: {e}")
+
+    atexit.register(cleanup)
+
+def init_worker_avg(
+        distances_name, distances_shape, 
+        clusters_name, clusters_shape,
+        closest_distances_intra_name, closest_distances_intra_shape, 
+        closest_points_intra_name, closest_points_intra_shape,
+        sum_distances_inter_name, sum_distances_inter_shape,
+        unique_clusters, cost_per_cluster, num_points, num_clusters):
+    """
+    Initializes a worker for multiprocessing by setting up shared memory
+    for the distances, clusters, closest distances and points.
+    NOTE: this version is specifically intended for solution objects that
+    use the "average" costs for inter-cluster distances!
+
+    Parameters:
+    -----------
+    distances_name: str
+        Name of the shared memory segment for distances.
+    distances_shape: tuple
+        Shape of the distances array.
+    clusters_name: str
+        Name of the shared memory segment for clusters.
+    clusters_shape: tuple
+        Shape of the clusters array.
+    closest_distances_intra_name: str
+        Name of the shared memory segment for intra-cluster closest distances.
+    closest_distances_intra_shape: tuple
+        Shape of the intra-cluster closest distances array.
+    closest_points_intra_name: str
+        Name of the shared memory segment for intra-cluster closest points.
+    closest_points_intra_shape: tuple
+        Shape of the intra-cluster closest points array.
+    sum_distances_inter_name: str
+        Name of the shared memory segment for inter-cluster sum distances.
+    sum_distances_inter_shape: tuple
+        Shape of the inter-cluster sum distances array.
+    unique_clusters: np.ndarray
+        Array of unique cluster indices.
+    cost_per_cluster: np.ndarray
+        Costs associated with selecting a point from a cluster.
+        NOTE: This cost may be different for each cluster.
+    num_points: int
+        Total number of points in the dataset.
+    num_clusters: int
+        Total number of clusters in the dataset.
+    """
+    import numpy as np
+    import multiprocessing.shared_memory as shm
+    import atexit
+
+    global _distances_shm, _distances
+    _distances_shm = shm.SharedMemory(name=distances_name)
+    _distances = np.ndarray(distances_shape, dtype=DISTANCE_DTYPE, buffer=_distances_shm.buf)
+    global _clusters_shm, _clusters
+    _clusters_shm = shm.SharedMemory(name=clusters_name)
+    _clusters = np.ndarray(clusters_shape, dtype=np.int64, buffer=_clusters_shm.buf)
+    global _closest_distances_intra_shm, _closest_distances_intra
+    _closest_distances_intra_shm = shm.SharedMemory(name=closest_distances_intra_name)
+    _closest_distances_intra = np.ndarray(closest_distances_intra_shape, dtype=DISTANCE_DTYPE, buffer=_closest_distances_intra_shm.buf)
+    global _closest_points_intra_shm, _closest_points_intra
+    _closest_points_intra_shm = shm.SharedMemory(name=closest_points_intra_name)
+    _closest_points_intra = np.ndarray(closest_points_intra_shape, dtype=np.int32, buffer=_closest_points_intra_shm.buf)
+    global _sum_distances_inter_shm, _sum_distances_inter
+    _sum_distances_inter_shm = shm.SharedMemory(name=sum_distances_inter_name)
+    _sum_distances_inter = np.ndarray(sum_distances_inter_shape, dtype=DISTANCE_DTYPE, buffer=_sum_distances_inter_shm.buf)
+    global _unique_clusters, _cost_per_cluster, _num_points, _num_clusters
+    _unique_clusters = unique_clusters
+    _cost_per_cluster = cost_per_cluster
+    _num_points = num_points
+
+    # Define clean up function to close shared memory
+    def cleanup():
+        try:
+            _distances_shm.close()
+            _clusters_shm.close()
+            _closest_distances_intra_shm.close()
+            _closest_points_intra_shm.close()
+            _sum_distances_inter_shm.close()
         except Exception as e:
             print(f"Error closing shared memory: {e}")
 
