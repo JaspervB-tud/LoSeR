@@ -3309,24 +3309,20 @@ def evaluate_swap_mp_avg(
     add_for_other_clusters = []
     for other_cluster in _unique_clusters:
         if other_cluster != cluster:
-            old_sum = get_distance(cluster, other_cluster, _sum_distances_inter, _num_clusters)
-            old_num_pairs = len(selection_per_cluster[other_cluster]) * len(selection_per_cluster[cluster])
-            new_sum = old_sum
-            new_num_pairs = old_num_pairs
-
-            # Batching
-            similarities_add = [
-                1.0 - get_distance(idx, idx_to_add, _distances, _num_points) for idx_to_add in idxs_to_add
-                for idx in selection_per_cluster[other_cluster]
-            ]
-            similarities_remove = [
-                1.0 - get_distance(idx, idx_to_remove, _distances, _num_points)
-                for idx in selection_per_cluster[other_cluster]
-            ]
-            new_sum += sum(similarities_add) - sum(similarities_remove)
-            new_num_pairs += len(similarities_add) - len(similarities_remove)
-            candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs) #change in objective
-            add_for_other_clusters.append((other_cluster, new_sum))
+            old_numerator = get_distance(cluster, other_cluster, _distances_inter_numerator, _num_clusters)
+            old_denominator = get_distance(cluster, other_cluster, _distances_inter_denominator, _num_clusters)
+            new_numerator = old_numerator
+            new_denominator = old_denominator
+            for idx in selection_per_cluster[other_cluster]:
+                for idx_to_add in idxs_to_add:
+                    cur_similarity = 1.0 - get_distance(idx, idx_to_add, _distances, _num_points)
+                    new_numerator += cur_similarity * math.exp(cur_similarity * _beta - _logsum_factor)
+                    new_denominator += math.exp(cur_similarity * _beta - _logsum_factor)
+                cur_similarity = 1.0 - get_distance(idx, idx_to_remove, _distances, _num_points)
+                new_numerator -= cur_similarity * math.exp(cur_similarity * _beta - _logsum_factor)
+                new_denominator -= math.exp(cur_similarity * _beta - _logsum_factor)
+            candidate_objective += (new_numerator/new_denominator) - (old_numerator/old_denominator)
+            add_for_other_clusters.append((other_cluster, new_numerator, new_denominator))
 
     if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
         return candidate_objective, add_within_cluster, add_for_other_clusters
