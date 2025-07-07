@@ -3449,19 +3449,16 @@ def evaluate_remove_mp_avg(
     add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
     for other_cluster in _unique_clusters:
         if other_cluster != cluster:
-            old_sum = get_distance(cluster, other_cluster, _sum_distances_inter, _num_clusters)
-            old_num_pairs = len(selection_per_cluster[other_cluster]) * len(selection_per_cluster[cluster])
-            new_sum = old_sum 
-            new_num_pairs = old_num_pairs
-
-            similarities = [
-                1.0 - get_distance(idx, idx_to_remove, _distances, _num_points)
-                for idx in selection_per_cluster[other_cluster]
-            ]
-            new_sum -= sum(similarities)
-            new_num_pairs -= len(similarities)
-            candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs)
-            add_for_other_clusters.append((other_cluster, new_sum))
+            old_numerator = get_distance(cluster, other_cluster, _distances_inter_numerator, _num_clusters)
+            old_denominator = get_distance(cluster, other_cluster, _distances_inter_denominator, _num_clusters)
+            new_numerator = old_numerator
+            new_denominator = old_denominator
+            for idx in selection_per_cluster[other_cluster]:
+                cur_similarity = 1.0 - get_distance(idx, idx_to_remove, _distances, _num_points)
+                new_numerator -= cur_similarity * math.exp(cur_similarity * _beta - _logsum_factor)
+                new_denominator -= math.exp(cur_similarity * _beta - _logsum_factor)
+            candidate_objective += (new_numerator/new_denominator) - (old_numerator/old_denominator)
+            add_for_other_clusters.append((other_cluster, new_numerator, new_denominator))
     
     # NOTE: Intra-cluster distance can only increase when removing a point, so when doing local search we can exit here if objective is worse
     if candidate_objective > objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
@@ -3762,8 +3759,8 @@ def process_batch_avg(batch, event, selection_per_cluster, nonselection_per_clus
         add_within_cluster, and add_for_other_clusters if an improvement is found,
         otherwise (None, None, -1, None, None).
     """
-    global _distances, _clusters, _closest_distances_intra, _closest_points_intra, _sum_distances_inter
-    global _unique_clusters, _num_points, _num_clusters
+    global _distances, _clusters, _closest_distances_intra, _closest_points_intra, _distances_inter_numerator, _distances_inter_denominator
+    global _unique_clusters, _num_points, _num_clusters, _beta, _logsum_factor
 
     num_improvements = 0
     num_moves = 0
