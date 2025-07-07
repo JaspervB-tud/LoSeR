@@ -2294,7 +2294,7 @@ class SolutionAverage(Solution):
             Structure: [(index_to_change, new_distance)]
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
-            Structure: [(index_other_cluster, new_sum_distance)]
+            Structure: [(index_other_cluster, new_numerator, new_denominator)]
         """
         cluster = self.clusters[idx_to_add]
         # Update selected points
@@ -2306,8 +2306,9 @@ class SolutionAverage(Solution):
             self.closest_distances_intra[idx] = dist
             self.closest_points_intra[idx] = idx_to_add
         # Update inter cluster distances (add_for_other_clusters)
-        for other_cluster, new_sum in add_for_other_clusters:
-            self.sum_distances_inter[get_index(cluster, other_cluster, self.num_clusters)] = new_sum
+        for other_cluster, new_numerator, new_denominator in add_for_other_clusters:
+            self.distances_inter_numerator[get_index(cluster, other_cluster, self.num_clusters)] = new_numerator
+            self.distances_inter_denominator[get_index(cluster, other_cluster, self.num_clusters)] = new_denominator
         # Update objective value
         self.objective = candidate_objective
 
