@@ -2239,7 +2239,7 @@ class SolutionAverage(Solution):
             Structure: [(index_to_change, new_distance)]
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
-            Structure: [(other_cluster_index, new_sum_distance)]
+            Structure: [(other_cluster_index, new_numerator, new_denominator)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
@@ -2264,19 +2264,16 @@ class SolutionAverage(Solution):
         add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
         for other_cluster in self.unique_clusters:
             if other_cluster != cluster:
-                old_sum = get_distance(cluster, other_cluster, self.sum_distances_inter, self.num_clusters)
-                old_num_pairs = len(self.selection_per_cluster[other_cluster]) * len(self.selection_per_cluster[cluster])
-                new_sum = old_sum 
-                new_num_pairs = old_num_pairs
-
-                similarities = [
-                    1 - get_distance(idx, idx_to_add, self.distances, self.num_points)
-                    for idx in self.selection_per_cluster[other_cluster]
-                ]
-                new_sum += sum(similarities)
-                new_num_pairs += len(similarities)
-                candidate_objective += (new_sum/new_num_pairs) - (old_sum/old_num_pairs) #change in objective
-                add_for_other_clusters.append((other_cluster, new_sum))
+                old_numerator = get_distance(cluster, other_cluster, self.distances_inter_numerator, self.num_clusters)
+                old_denominator = get_distance(cluster, other_cluster, self.distances_inter_denominator, self.num_clusters)
+                new_numerator = old_numerator
+                new_denominator = old_denominator
+                for idx in self.selection_per_cluster[other_cluster]:
+                    cur_similarity = 1.0 - get_distance(idx, idx_to_add, self.distances, self.num_points)
+                    new_numerator += cur_similarity * math.exp(cur_similarity * self.beta - self.logsum_factor)
+                    new_denominator += math.exp(cur_similarity * self.beta - self.logsum_factor)
+                candidate_objective += new_numerator/new_denominator - old_numerator/old_denominator #change in objective
+                add_for_other_clusters.append((other_cluster, new_numerator, new_denominator))
                 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
