@@ -82,56 +82,128 @@ class Solution:
     def __eq__(self, other):
         """
         Check if two solutions are equal.
+        NOTE: This purely checks if all attributes are equal, excluding the random state.
         """
-        if not isinstance(other, Solution):
-            print("Other object is not a Solution instance.")
+        # Check if other is an instance of the same class
+        if not isinstance(other, type(self)):
+            print("Other object is not of the same type as self.")
             return False
-        # Check if distances and clusters are equal
-        if not np.allclose(self.distances, other.distances, atol=PRECISION_THRESHOLD) or not np.array_equal(self.clusters, other.clusters):
-            print("Distances or clusters are not equal.")
+        # Check if selections are equal
+        try:
+            if not np.array_equal(self.selection, other.selection):
+                print("Selections are not equal.")
+                return False
+        except:
+            print("Selections could not be compared.")
             return False
-        # Check if selection is equal
-        if self.selection is None or other.selection is None:
+        # Check if distances are equal
+        try:
+            if not np.allclose(self.distances, other.distances, atol=PRECISION_THRESHOLD):
+                print("Distances are not equal.")
+                return False
+        except:
+            print("Distances could not be compared.")
             return False
-        # Check if selection is equal
-        if self.selection.shape != other.selection.shape:
+        # Check if clusters are equal
+        try:
+            if not np.array_equal(self.clusters, other.clusters):
+                print("Clusters are not equal.")
+                return False
+        except:
+            print("Clusters could not be compared.")
             return False
-        if not np.array_equal(self.selection, other.selection):
+        # Check if unique clusters are equal
+        try:
+            if not np.array_equal(self.unique_clusters, other.unique_clusters):
+                print("Unique clusters are not equal.")
+                return False
+        except:
+            print("Unique clusters could not be compared.")
             return False
         # Check if selection cost is equal
         if not math.isclose(self.selection_cost, other.selection_cost, rel_tol=PRECISION_THRESHOLD):
+            print("Selection costs are not equal.")
             return False
-        # Check if feasible is equal
-        if self.feasible != other.feasible:
-            return False
-        if self.feasible:
-            # Check if objective is equal
-            if not math.isclose(self.objective, other.objective, rel_tol=PRECISION_THRESHOLD):
-                print("Objective values are not equal: ", self.objective, other.objective)
+        # Check if cost per cluster is equal
+        try:
+            if not np.allclose(self.cost_per_cluster, other.cost_per_cluster, atol=PRECISION_THRESHOLD):
+                print("Cost per cluster is not equal.")
                 return False
-            # Check if closest_distances_intra is equal
+        except:
+            print("Cost per cluster could not be compared.")
+            print(e)
+            return False
+        # Check if number of points is equal
+        if self.num_points != other.num_points:
+            print("Number of points is not equal.")
+            return False
+        # Check if points per cluster are equal
+        if set(self.points_per_cluster.keys()) != set(other.points_per_cluster.keys()):
+            print("Points per cluster keys are not equal.")
+            return False
+        for cluster in self.points_per_cluster:
+            if self.points_per_cluster[cluster] != other.points_per_cluster[cluster]:
+                print(f"Points in cluster {cluster} are not equal.")
+                return False
+        # Check if selections per cluster are equal
+        if set(self.selection_per_cluster.keys()) != set(other.selection_per_cluster.keys()):
+            print("Selection per cluster keys are not equal.")
+            return False
+        for cluster in self.selection_per_cluster:
+            if self.selection_per_cluster[cluster] != other.selection_per_cluster[cluster]:
+                print(f"Selection in cluster {cluster} is not equal.")
+                return False
+        # Check if non-selections per cluster are equal
+        if set(self.nonselection_per_cluster.keys()) != set(other.nonselection_per_cluster.keys()):
+            print("Non-selection per cluster keys are not equal.")
+            return False
+        for cluster in self.nonselection_per_cluster:
+            if self.nonselection_per_cluster[cluster] != other.nonselection_per_cluster[cluster]:
+                print(f"Non-selection in cluster {cluster} is not equal.")
+                return False
+        # Check if closest intra cluster distances are equal
+        try:
             if not np.allclose(self.closest_distances_intra, other.closest_distances_intra, atol=PRECISION_THRESHOLD):
-                print("Closest distances intra are not equal.")
+                print("Closest intra cluster distances are not equal.")
                 return False
-            # Check if closest_points_intra is equal
-            if not np.allclose(self.closest_points_intra, other.closest_points_intra, atol=PRECISION_THRESHOLD):
-                print("Closest points intra are not equal.")
+        except:
+            print("Closest intra cluster distances could not be compared.")
+            return False
+        # Check if closest intra cluster points are equal
+        try:
+            if not np.array_equal(self.closest_points_intra, other.closest_points_intra):
+                print("Closest intra cluster points are not equal.")
                 return False
-            # Check if closest_distances_inter is equal
+        except:
+            print("Closest intra cluster points could not be compared.")
+            return False
+        # Check if closest inter cluster distances are equal
+        try:
             if not np.allclose(self.closest_distances_inter, other.closest_distances_inter, atol=PRECISION_THRESHOLD):
-                print("Closest distances inter are not equal.")
+                print("Closest inter cluster distances are not equal.")
                 return False
-            # Check if closest_points_inter is equal
-            if set(self.closest_points_inter.keys()) != set(other.closest_points_inter.keys()):
-                print("Closest points inter keys are not equal.")
+        except:
+            print("Closest inter cluster distances could not be compared.")
+            return False
+        # Check if closest inter cluster points are equal
+        try:
+            if not np.array_equal(self.closest_points_inter, other.closest_points_inter):
+                print("Closest inter cluster points are not equal.")
+                print(self.closest_points_inter)
+                print(other.closest_points_inter)
                 return False
-            for key in self.closest_points_inter:
-                if self.closest_points_inter[key] != other.closest_points_inter[key]:
-                    print(f"Closest points inter for key {key} are not equal.")
-                    return False
-            if not np.allclose(self.closest_points_inter_array, other.closest_points_inter_array, atol=PRECISION_THRESHOLD):
-                print("Closest points inter array are not equal.")
-                return False
+        except:
+            print("Closest inter cluster points could not be compared.")
+            return False
+        # Check if feasibilities are equal
+        if self.feasible != other.feasible:
+            print("Feasibilities are not equal.")
+            return False
+        # Check if objectives are equal
+        if not math.isclose(self.objective, other.objective, rel_tol=PRECISION_THRESHOLD):
+            print("Objectives are not equal.")
+            return False
+
         return True
 
     def determine_feasibility(self):
@@ -207,8 +279,8 @@ class Solution:
                         cur_pair = (point_1, point_2)
             self.closest_distances_inter[cluster_1, cluster_2] = cur_max
             self.closest_distances_inter[cluster_2, cluster_1] = cur_max
-            self.closest_points_inter[cluster_1, cluster_2] = cur_pair[1]
-            self.closest_points_inter[cluster_2, cluster_1] = cur_pair[0]
+            self.closest_points_inter[cluster_1, cluster_2] = cur_pair[0]
+            self.closest_points_inter[cluster_2, cluster_1] = cur_pair[1]
             objective += cur_max
         self.objective = objective
 
@@ -405,30 +477,35 @@ class Solution:
             on intra distances.
         add_within_cluster: list of tuples
             The changes to be made within the cluster of the added point.
-            Structure: [(index_to_change, new_distance)]
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+            NOTE: new_closest_point will always be idx_to_add
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
-            Structure: [(index_other_cluster, new_distance, index_in_other_cluster)]
+            Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
+            NOTE: point_in_this_cluster will always be idx_to_add
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
         if self.selection[idx_to_add]:
             raise ValueError("The point to add must not be selected.")
         cluster = self.clusters[idx_to_add]
+
+        # Calculate selection cost
         candidate_objective = self.objective + self.cost_per_cluster[cluster] # cost for adding the point
-        # Calculate intra cluster distances for cluster of new point
+
+        # Calculate intra-cluster distances
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in self.nonselection_per_cluster[cluster]:
             cur_dist = get_distance(idx, idx_to_add, self.distances, self.num_points) # distance to current point (idx)
             if cur_dist < self.closest_distances_intra[idx]:
                 candidate_objective += cur_dist - self.closest_distances_intra[idx]
-                add_within_cluster.append((idx, cur_dist))
+                add_within_cluster.append((idx, idx_to_add, cur_dist))
 
         # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
         if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > PRECISION_THRESHOLD and local_search:
             return np.inf, None, None
 
-        # Inter cluster distances for other clusters
+        # Calculate inter-cluster distances for other clusters
         add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
         for other_cluster in self.unique_clusters:
             if other_cluster != cluster:
@@ -441,7 +518,7 @@ class Solution:
                         cur_idx = idx
                 if cur_idx > -1:
                     candidate_objective += cur_max - self.closest_distances_inter[cluster, other_cluster]
-                    add_for_other_clusters.append((other_cluster, cur_max, cur_idx))
+                    add_for_other_clusters.append((other_cluster, (idx_to_add, cur_idx), cur_max))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
@@ -477,12 +554,8 @@ class Solution:
         for other_cluster, dist, idx in add_for_other_clusters:
             self.closest_distances_inter[cluster, other_cluster] = dist
             self.closest_distances_inter[other_cluster, cluster] = dist
-            if other_cluster < cluster:
-                self.closest_points_inter[(other_cluster, cluster)] = (idx, idx_to_add)
-            else:
-                self.closest_points_inter[(cluster, other_cluster)] = (idx_to_add, idx)
-            self.closest_points_inter_array[cluster, other_cluster] = idx
-            self.closest_points_inter_array[other_cluster, cluster] = idx_to_add
+            self.closest_points_inter[cluster, other_cluster] = idx_to_add
+            self.closest_points_inter[other_cluster, cluster] = idx
         # Update objective value
         self.objective = candidate_objective
          
@@ -605,7 +678,7 @@ class Solution:
             Structure: [(index_to_change, new_closest_point, new_distance)]
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
-            Structure: [(index_other_cluster, closest_point_pair, new_distance)]
+            Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
@@ -624,7 +697,6 @@ class Solution:
             if self.clusters[idx] != cluster:
                 raise ValueError("All points must be in the same cluster.")
             
-        candidate_objective = self.objective + (num_to_add - 1) * self.cost_per_cluster[cluster]
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
         for idx in idxs_to_add:
@@ -633,14 +705,15 @@ class Solution:
         new_nonselection = set(self.nonselection_per_cluster[cluster])
         new_nonselection.add(idx_to_remove)
 
-        # Calculate intra cluster distances for cluster of new point
-        #   - check if removed point was closest selected point for any of the unselected points -> if so, replace with new point
-        #   - check if added point is closest selected point for any of the unselected points -> if so, replace
-        add_within_cluster = []
+        # Calculate selection cost
+        candidate_objective = self.objective + (num_to_add - 1) * self.cost_per_cluster[cluster] #cost for swapping points
+
+        # Calculate intra-cluster distances
+        add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in new_nonselection:
             cur_closest_distance = self.closest_distances_intra[idx]
             cur_closest_point = self.closest_points_intra[idx]
-            if cur_closest_point == idx_to_remove:
+            if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
                 cur_closest_distance = np.inf
                 for other_idx in new_selection:
                     cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
@@ -656,12 +729,12 @@ class Solution:
                     candidate_objective += cur_dist - cur_closest_distance
                     add_within_cluster.append((idx, idx_to_add, cur_dist))
 
-        # Calculate inter cluster distances for all other clusters
-        add_for_other_clusters = [] 
+        # Calculate inter-cluster distances for all other clusters
+        add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
         for other_cluster in self.unique_clusters:
             if other_cluster != cluster:
                 cur_closest_similarity = self.closest_distances_inter[cluster, other_cluster]
-                cur_closest_point = self.closest_points_inter_array[other_cluster, cluster]
+                cur_closest_point = self.closest_points_inter[cluster, other_cluster]
                 cur_closest_pair = (-1, -1)
                 if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
                     cur_closest_similarity = -np.inf
@@ -670,10 +743,7 @@ class Solution:
                             cur_similarity = 1.0 - get_distance(idx, other_idx, self.distances, self.num_points)
                             if cur_similarity > cur_closest_similarity:
                                 cur_closest_similarity = cur_similarity
-                                if other_cluster < cluster:
-                                    cur_closest_pair = (idx, other_idx)
-                                else:
-                                    cur_closest_pair = (other_idx, idx)
+                                cur_closest_pair = (other_idx, idx)
                     candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
                     add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
                 else: #point to be removed is not closest, check if one of newly added points is closer
@@ -682,10 +752,7 @@ class Solution:
                         cur_similarity, idx_to_add = max(cur_similarities, key = lambda x: x[0])
                         if cur_similarity > cur_closest_similarity:
                             cur_closest_similarity = cur_similarity
-                            if other_cluster < cluster:
-                                cur_closest_pair = (idx, idx_to_add)
-                            else:
-                                cur_closest_pair = (idx_to_add, idx)
+                            cur_closest_pair = (idx_to_add, idx)
                         if cur_closest_pair[0] > -1:
                             candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
                             add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
@@ -1119,6 +1186,56 @@ class Solution:
         elif move_type == "remove":
             idx_to_remove = move_content
             self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+
+    def accept_move_universal(self, idxs_to_add: list, idxs_to_remove: list, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
+        """
+        Accepts a move to the solution, where multiple points can be added and removed at once.
+        NOTE: This assumes that the initial solution and the move
+        are feasible and will not check for this.
+
+        PARAMETERS:
+        -----------
+        idxs_to_add: list of int
+            The indices of the points to be added.
+            NOTE: This assumes that all indices to be added are in the same cluster (which should be the same as the indices to remove)!
+        idxs_to_remove: list of int
+            The indices of the points to be removed.
+            NOTE: This assumes that all indices to be removed are in the same cluster (which should be the same as the indices to add)!
+        candidate_objective: float
+            The objective value of the solution after the move.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, (closest_point_this_cluster, closest_point_other_cluster), new_distance)]
+        """
+        found_clusters = set()
+        for idx in idxs_to_add + idxs_to_remove:
+            found_clusters.add(self.clusters[idx])
+        if len(found_clusters) != 1:
+            raise ValueError("All points to add and remove must be in the same cluster.")
+        cluster = found_clusters.pop()
+
+        for idx_to_add in idxs_to_add:
+            self.selection[idx_to_add] = True
+            self.selection_per_cluster[cluster].add(idx_to_add)
+            self.nonselection_per_cluster[cluster].remove(idx_to_add)
+        for idx_to_remove in idxs_to_remove:
+            self.selection[idx_to_remove] = False
+            self.selection_per_cluster[cluster].remove(idx_to_remove)
+            self.nonselection_per_cluster[cluster].add(idx_to_remove)
+
+        for idx_to_change, new_closest_point, new_distance in add_within_cluster:
+            self.closest_distances_intra[idx_to_change] = new_distance
+            self.closest_points_intra[idx_to_change] = new_closest_point
+        for other_cluster, (closest_point_this_cluster, closest_point_other_cluster), new_distance in add_for_other_clusters:
+            self.closest_distances_inter[cluster, other_cluster] = new_distance
+            self.closest_distances_inter[other_cluster, cluster] = new_distance
+            self.closest_points_inter[cluster, other_cluster] = closest_point_this_cluster
+            self.closest_points_inter[other_cluster, cluster] = closest_point_other_cluster
+
+        self.objective = candidate_objective
 
     def local_search_sp(self,
                         max_iterations: int = 10_000, max_runtime: float = np.inf,
