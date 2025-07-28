@@ -16,12 +16,13 @@ CLUSTERS_SMALL = np.array([
 ], dtype=np.int64)
 
 DISTANCES_MEDIUM = np.array([
-    [0.0, 0.9, 1.0, 0.7, 0.6, 0.5], #0
-    [0.9, 0.0, 0.4, 0.3, 0.2, 0.1], #0
-    [1.0, 0.4, 0.0, 0.5, 0.6, 0.7], #0
-    [0.7, 0.3, 0.5, 0.0, 0.1, 0.2], #1
-    [0.6, 0.2, 0.6, 0.1, 0.0, 0.3], #1
-    [0.5, 0.1, 0.7, 0.2, 0.3, 0.0]  #1
+    [0.0, 0.9, 1.0,     0.7, 0.6, 0.5], #0
+    [0.9, 0.0, 0.4,     0.3, 0.2, 0.1], #0
+    [1.0, 0.4, 0.0,     0.5, 0.6, 0.7], #0
+
+    [0.7, 0.3, 0.5,     0.0, 0.1, 0.2], #1
+    [0.6, 0.2, 0.6,     0.1, 0.0, 0.3], #1
+    [0.5, 0.1, 0.7,     0.2, 0.3, 0.0]  #1
 ], dtype=np.float64)
 CLUSTERS_MEDIUM = np.array([
     0, 0, 0, 1, 1, 1
@@ -854,11 +855,11 @@ def test_accept_doubleswap_large_1():
 
 # TESTS FOR "evaluate_remove" METHOD
 def test_evaluate_remove_small_1():
-    """Test the evaluation of adding a point to a small solution."""
+    """Test the evaluation of removing a point from a small solution."""
     distances = DISTANCES_SMALL
     clusters = CLUSTERS_SMALL
     selection_cost = 0.1
-    selection = np.array([True, True, True], dtype=bool) #adding the point should improve intra and affect inter
+    selection = np.array([True, True, True], dtype=bool)
     idx_to_remove = 1
     new_selection = selection.copy()
     new_selection[idx_to_remove] = False
@@ -869,13 +870,13 @@ def test_evaluate_remove_small_1():
         new_selection, distances, clusters, selection_cost
     )
     expected_intra_changes = [
-        (idx_to_add, idx_to_add, 0.0)
+        (idx_to_remove, 2, 0.5)
     ]
     expected_inter_changes = [
-        (0, (idx_to_add, 0), 0.9),  # Cluster 0, point 1 in cluster 0, point 2 in cluster 1
+        (0, (2, 0), 0.7),
     ]
 
-    actual_candidate_objective, actual_intra_changes, actual_inter_changes = solution_object.evaluate_add(idx_to_add)
+    actual_candidate_objective, actual_intra_changes, actual_inter_changes = solution_object.evaluate_remove(idx_to_remove)
 
     # Compare objective values
     np.testing.assert_almost_equal(actual_candidate_objective, expected_candidate_objective, decimal=TOLERANCE)
@@ -884,11 +885,96 @@ def test_evaluate_remove_small_1():
     # Compare inter changes
     compare_inter_changes(actual_inter_changes, expected_inter_changes)
 
+def test_evaluate_remove_small_2():
+    """Test the evaluation of removing a point from a small solution."""
+    distances = DISTANCES_SMALL
+    clusters = CLUSTERS_SMALL
+    selection_cost = 0.1
+    selection = np.array([True, True, True], dtype=bool)
+    idx_to_remove = 2
+    new_selection = selection.copy()
+    new_selection[idx_to_remove] = False
 
+    solution_object = solution.Solution(distances, clusters, selection, selection_cost=selection_cost, seed=1234)
 
+    expected_candidate_objective, _ = calculate_objective(
+        new_selection, distances, clusters, selection_cost
+    )
+    expected_intra_changes = [
+        (idx_to_remove, 1, 0.5)
+    ]
+    expected_inter_changes = [
+    ]
 
+    actual_candidate_objective, actual_intra_changes, actual_inter_changes = solution_object.evaluate_remove(idx_to_remove)
 
+    # Compare objective values
+    np.testing.assert_almost_equal(actual_candidate_objective, expected_candidate_objective, decimal=TOLERANCE)
+    # Compare intra changes
+    compare_intra_changes(actual_intra_changes, expected_intra_changes)
+    # Compare inter changes
+    compare_inter_changes(actual_inter_changes, expected_inter_changes)
 
+def test_evaluate_remove_medium_1():
+    """Test the evaluation of removing a point from a medium solution."""
+    distances = DISTANCES_MEDIUM
+    clusters = CLUSTERS_MEDIUM
+    selection_cost = 0.1
+    selection = np.array([True, True, True, True, True, True], dtype=bool)
+    idx_to_remove = 2
+    new_selection = selection.copy()
+    new_selection[idx_to_remove] = False
+
+    solution_object = solution.Solution(distances, clusters, selection, selection_cost=selection_cost, seed=1234)
+
+    expected_candidate_objective, _ = calculate_objective(
+        new_selection, distances, clusters, selection_cost
+    )
+    expected_intra_changes = [
+        (idx_to_remove, 1, 0.4)
+    ]
+    expected_inter_changes = [
+    ]
+
+    actual_candidate_objective, actual_intra_changes, actual_inter_changes = solution_object.evaluate_remove(idx_to_remove)
+
+    # Compare objective values
+    np.testing.assert_almost_equal(actual_candidate_objective, expected_candidate_objective, decimal=TOLERANCE)
+    # Compare intra changes
+    compare_intra_changes(actual_intra_changes, expected_intra_changes)
+    # Compare inter changes
+    compare_inter_changes(actual_inter_changes, expected_inter_changes)
+
+def test_evaluate_remove_large_1():
+    """Test the evaluation of removing a point from a large solution."""
+    distances = DISTANCES_LARGE
+    clusters = CLUSTERS_LARGE
+    selection_cost = 0.1
+    selection = np.array([False, True, True,   True,   True, False,    True, False, False, False], dtype=bool)
+    idx_to_remove = 1
+    new_selection = selection.copy()
+    new_selection[idx_to_remove] = False
+
+    solution_object = solution.Solution(distances, clusters, selection, selection_cost=selection_cost, seed=1234)
+
+    expected_candidate_objective, _ = calculate_objective(
+        new_selection, distances, clusters, selection_cost
+    )
+    expected_intra_changes = [
+        (idx_to_remove, 2, 0.3),
+        (0, 2, 0.4),
+    ]
+    expected_inter_changes = [
+    ]
+
+    actual_candidate_objective, actual_intra_changes, actual_inter_changes = solution_object.evaluate_remove(idx_to_remove)
+
+    # Compare objective values
+    np.testing.assert_almost_equal(actual_candidate_objective, expected_candidate_objective, decimal=TOLERANCE)
+    # Compare intra changes
+    compare_intra_changes(actual_intra_changes, expected_intra_changes)
+    # Compare inter changes
+    compare_inter_changes(actual_inter_changes, expected_inter_changes)
 
 
 

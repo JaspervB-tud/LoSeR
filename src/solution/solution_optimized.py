@@ -1070,6 +1070,7 @@ class Solution:
         for other_cluster in self.unique_clusters:
             if other_cluster != cluster:
                 cur_closest_similarity = self.closest_distances_inter[cluster, other_cluster]
+                cur_closest_point = self.closest_points_inter[cluster, other_cluster]
                 cur_closest_pair = (-1, -1)
                 if cur_closest_point == idx_to_remove:
                     cur_closest_similarity = -np.inf
