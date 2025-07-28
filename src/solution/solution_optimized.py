@@ -454,7 +454,7 @@ class Solution:
 
         return cls(distances, clusters, selection, selection_cost=selection_cost, cost_per_cluster=cost_per_cluster, seed=random_state)
 
-    def evaluate_add(self, idx_to_add, local_search=False):
+    def evaluate_add(self, idx_to_add: int, local_search=False):
         """
         Evaluates the effect of adding an unselected point to the solution.
 
@@ -1966,28 +1966,31 @@ class SolutionAverage(Solution):
             on intra distances.
         add_within_cluster: list of tuples
             The changes to be made within the cluster of the added point.
-            Structure: [(index_to_change, new_distance)]
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+            NOTE: new_closest_point will always be idx_to_add
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
-            Structure: [(other_cluster_index, new_numerator, new_denominator)]
+            Structure: [(index_other_cluster, new_numerator, new_denominator)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
         if self.selection[idx_to_add]:
             raise ValueError("The point to add must not be selected.")
         cluster = self.clusters[idx_to_add]
+
+        # Calculate selection cost
         candidate_objective = self.objective + self.cost_per_cluster[cluster] # cost for adding the point
 
-        # Calculate intra cluster distances for cluster of new point
+        # Calculate intra-cluster distances
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in self.nonselection_per_cluster[cluster]:
             cur_dist = get_distance(idx, idx_to_add, self.distances, self.num_points) # distance to current point (idx)
             if cur_dist < self.closest_distances_intra[idx]:
                 candidate_objective += cur_dist - self.closest_distances_intra[idx]
-                add_within_cluster.append((idx, cur_dist))
+                add_within_cluster.append((idx, idx_to_add, cur_dist))
 
         # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
-        if candidate_objective > self.objective and np.abs(self.objective - candidate_objective) > PRECISION_THRESHOLD and local_search:
+        if candidate_objective > self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD and local_search:
             return np.inf, None, None
 
         # Inter cluster distances for other clusters
@@ -2044,26 +2047,26 @@ class SolutionAverage(Solution):
 
     def evaluate_swap(self, idxs_to_add, idx_to_remove: int):
         """
-        Evaluates the effect of swapping a selected point for a pair of 
-        unselected points in the solution.
+        Evaluates the effect of swapping a selected point for a/multiple unselected point(s)
+        in the solution.
 
         Parameters:
         -----------
         idxs_to_add: tuple of int or list of int
-            A tuple containing the indices of the two points to be added.
+            The index or indices of the point(s) to be added.
         idx_to_remove: int
             The index of the point to be removed.
         
         Returns:
         --------
         candidate_objective: float
-            The objective value of the solution after the addition.
+            The objective value of the solution after the swap.
         add_within_cluster: list of tuples
             The changes to be made within the cluster of the added point.
             Structure: [(index_to_change, new_closest_point, new_distance)]
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
-            Structure: [(other_cluster_index, new_numerator, new_denominator)]
+            Structure: [(index_other_cluster, new_numerator, new_denominator)]
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
@@ -2082,7 +2085,6 @@ class SolutionAverage(Solution):
             if self.clusters[idx] != cluster:
                 raise ValueError("All points must be in the same cluster.")
             
-        candidate_objective = self.objective + (num_to_add - 1) * self.cost_per_cluster[cluster]
         # Generate pool of alternative points to compare to
         new_selection = set(self.selection_per_cluster[cluster])
         for idx in idxs_to_add:
@@ -2091,14 +2093,15 @@ class SolutionAverage(Solution):
         new_nonselection = set(self.nonselection_per_cluster[cluster])
         new_nonselection.add(idx_to_remove)
 
-        # Calculate intra cluster distances for cluster of new point
-        #   - check if removed point was closest selected point for any of the unselected points -> if so, replace with new point
-        #   - check if added point is closest selected point for any of the unselected points -> if so, replace
+        # Calculate selection cost
+        candidate_objective = self.objective + (num_to_add - 1) * self.cost_per_cluster[cluster]
+
+        # Calculate intra-cluster distances
         add_within_cluster = []
         for idx in new_nonselection:
             cur_closest_distance = self.closest_distances_intra[idx]
             cur_closest_point = self.closest_points_intra[idx]
-            if cur_closest_point == idx_to_remove:
+            if cur_closest_point == idx_to_remove: #if point to be removed is closest for current, find new closest
                 cur_closest_distance = np.inf
                 for other_idx in new_selection:
                     cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
@@ -2114,7 +2117,7 @@ class SolutionAverage(Solution):
                     candidate_objective += cur_dist - cur_closest_distance
                     add_within_cluster.append((idx, idx_to_add, cur_dist))
 
-        # Calculate inter cluster distances for all other clusters
+        # Calculate inter-cluster distances for all other clusters
         add_for_other_clusters = [] 
         for other_cluster in self.unique_clusters:
             if other_cluster != cluster:
@@ -2123,10 +2126,12 @@ class SolutionAverage(Solution):
                 new_numerator = old_numerator
                 new_denominator = old_denominator
                 for idx in self.selection_per_cluster[other_cluster]:
+                    # Similarities for point(s) to add
                     for idx_to_add in idxs_to_add:
                         cur_similarity = 1.0 - get_distance(idx, idx_to_add, self.distances, self.num_points)
                         new_numerator += cur_similarity * math.exp(cur_similarity * self.beta - self.logsum_factor)
                         new_denominator += math.exp(cur_similarity * self.beta - self.logsum_factor)
+                    # Similarities for point to remove
                     cur_similarity = 1.0 - get_distance(idx, idx_to_remove, self.distances, self.num_points)
                     new_numerator -= cur_similarity * math.exp(cur_similarity * self.beta - self.logsum_factor)
                     new_denominator -= math.exp(cur_similarity * self.beta - self.logsum_factor)
