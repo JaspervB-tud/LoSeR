@@ -4072,15 +4072,14 @@ def evaluate_add_mp(
                 candidate_objective += cur_dist - _closest_distances_intra[idx]
                 add_within_cluster.append((idx, idx_to_add, cur_dist))
 
-        # Inter cluster distances for other clusters
-        # NOTE: This can only increase the inter cluster cost, so if objective is already worse, we can skip this
+        # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
+        if candidate_objective > objective and np.abs(objective - candidate_objective) > PRECISION_THRESHOLD:
+            return -1, -1, -1
+
+        # Calculate inter-cluster distances for other clusters
         add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
-        if candidate_objective > objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
-            return np.inf, -1, -1 #-1, -1, -1 to signify no improvement
-        
         for other_cluster in _unique_clusters:
             if other_cluster != cluster:
-                #cur_max = get_distance(cluster, other_cluster, _closest_distances_inter, _unique_clusters.shape[0])
                 cur_max = _closest_distances_inter[cluster, other_cluster]
                 cur_idx = -1
                 for idx in selection_per_cluster[other_cluster]:
@@ -4089,14 +4088,13 @@ def evaluate_add_mp(
                         cur_max = cur_similarity
                         cur_idx = idx
                 if cur_idx > -1:
-                    #candidate_objective += cur_max - get_distance(cluster, other_cluster, _closest_distances_inter, _unique_clusters.shape[0])
                     candidate_objective += cur_max - _closest_distances_inter[cluster, other_cluster]
-                    add_for_other_clusters.append((other_cluster, cur_max, cur_idx))
+                    add_for_other_clusters.append((other_cluster, (idx_to_add, cur_idx), cur_max))
 
         if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
             return candidate_objective, add_within_cluster, add_for_other_clusters
         else:
-            return np.inf, -1, -1  # -1, -1, -1 to signify no improvement
+            return -1, -1, -1
         
 def evaluate_add_mp_avg(
         idx_to_add: int, objective: float,
