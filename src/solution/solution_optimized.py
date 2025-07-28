@@ -131,7 +131,6 @@ class Solution:
                 return False
         except:
             print("Cost per cluster could not be compared.")
-            print(e)
             return False
         # Check if number of points is equal
         if self.num_points != other.num_points:
@@ -478,11 +477,11 @@ class Solution:
         add_within_cluster: list of tuples
             The changes to be made within the cluster of the added point.
             Structure: [(index_to_change, new_closest_point, new_distance)]
-            NOTE: new_closest_point will always be idx_to_add
+            NOTE: new_closest_point will always be idx_to_add.
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
             Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
-            NOTE: point_in_this_cluster will always be idx_to_add
+            NOTE: point_in_this_cluster will always be idx_to_add.
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
@@ -753,9 +752,9 @@ class Solution:
                         if cur_similarity > cur_closest_similarity:
                             cur_closest_similarity = cur_similarity
                             cur_closest_pair = (idx_to_add, idx)
-                        if cur_closest_pair[0] > -1:
-                            candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
-                            add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
+                    if cur_closest_pair[0] > -1:
+                        candidate_objective += cur_closest_similarity - self.closest_distances_inter[cluster, other_cluster]
+                        add_for_other_clusters.append((other_cluster, cur_closest_pair, cur_closest_similarity))
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
@@ -1370,18 +1369,23 @@ class Solution:
                 move_counter += 1
                 if move_type == "add":
                     idx_to_add = move_content
+                    idxs_to_add = [idx_to_add]
+                    idxs_to_remove = []
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
                     if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                         solution_changed = True
                         break
                 elif move_type == "swap" or move_type == "doubleswap":
                     idxs_to_add, idx_to_remove = move_content
+                    idxs_to_remove = [idx_to_remove]
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idxs_to_add, idx_to_remove)
                     if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                         solution_changed = True
                         break
                 elif move_type == "remove":
+                    idxs_to_add = []
                     idx_to_remove = move_content
+                    idxs_to_remove = [idx_to_remove]
                     candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
                     if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                         solution_changed = True
@@ -1395,8 +1399,9 @@ class Solution:
 
             time_per_iteration.append(time.time() - current_iteration_time)
             if solution_changed: # If improvement is found, update solution
-                print(move_type, move_content, candidate_objective)
-                self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
+                self.accept_move_universal(idxs_to_add, idxs_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                del idxs_to_add, idxs_to_remove
+                #self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
                 iteration += 1
                 # Check if time exceeds allowed runtime
                 if time.time() - start_time > max_runtime:
@@ -2636,10 +2641,10 @@ class Solution:
             for idx_to_remove in selected:
                 if number_to_add == 1:
                     for idx_to_add in unselected:
-                        yield idx_to_add, idx_to_remove
+                        yield [idx_to_add], idx_to_remove
                 else:
                     for indices_to_add in itertools.combinations(unselected, number_to_add):
-                        yield indices_to_add, idx_to_remove
+                        yield list(indices_to_add), idx_to_remove
 
     def generate_indices_remove(self, random=False):
         """
@@ -4039,23 +4044,39 @@ def evaluate_add_mp(
         nonselection: set
             A set of indices of points (in the cluster of the point to be added) that are currently 
             not selected in the solution.
+
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+            NOTE: if the addition does not improve the objective, np.inf is returned.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+            NOTE: new_closest_point will always be idx_to_add.
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
+            NOTE: point_in_this_cluster will always be idx_to_add.
         """
         cluster = _clusters[idx_to_add]
+
+        # Calculate selection cost
         candidate_objective = objective + _cost_per_cluster[cluster] # cost for adding the point
         
-        # Intra cluster distances for same cluster
+        # Calculate intra-cluster distances
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in nonselection:
-            cur_dist = get_distance(idx, idx_to_add, _distances, _num_points) # distance to current point (idx)
+            cur_dist = get_distance(idx, idx_to_add, _distances, _num_points) #distance to current point (idx)
             if cur_dist < _closest_distances_intra[idx]:
                 candidate_objective += cur_dist - _closest_distances_intra[idx]
-                add_within_cluster.append((idx, cur_dist))
+                add_within_cluster.append((idx, idx_to_add, cur_dist))
 
         # Inter cluster distances for other clusters
         # NOTE: This can only increase the inter cluster cost, so if objective is already worse, we can skip this
         add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
         if candidate_objective > objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
-            return -1, -1, -1 #-1, -1, -1 to signify no improvement
+            return np.inf, -1, -1 #-1, -1, -1 to signify no improvement
         
         for other_cluster in _unique_clusters:
             if other_cluster != cluster:
@@ -4075,7 +4096,7 @@ def evaluate_add_mp(
         if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
             return candidate_objective, add_within_cluster, add_for_other_clusters
         else:
-            return -1, -1, -1  # -1, -1, -1 to signify no improvement
+            return np.inf, -1, -1  # -1, -1, -1 to signify no improvement
         
 def evaluate_add_mp_avg(
         idx_to_add: int, objective: float,

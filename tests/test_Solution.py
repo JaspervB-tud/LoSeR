@@ -1035,7 +1035,7 @@ def test_accept_remove_medium_1():
     assert solution_object == expected_solution
 
 def test_accept_remove_large_1():
-    """Test the acceptance of removing a point from a medium solution."""
+    """Test the acceptance of removing a point from a large solution."""
     distances = DISTANCES_LARGE
     clusters = CLUSTERS_LARGE
     selection_cost = 0.1
