@@ -965,12 +965,6 @@ class Solution:
             The maximum runtime in seconds for the local search.
         num_cores: int
             The number of cores to use for parallel processing.
-            NOTE: if set to 1, local search will always run in
-            single processor mode, even if hybrid is True.
-        hybrid: bool
-            If True, local search will switch to multiprocessing
-            after num_switch consecutive iterations take longer
-            than runtime_switch seconds.
         random_move_order: bool
             If True, the order of moves (add, swap, doubleswap,
             remove) is randomized.
@@ -1096,7 +1090,7 @@ class Solution:
             shared_clusters = np.ndarray(self.clusters.shape, dtype=self.clusters.dtype, buffer=clusters_shm.buf)
             np.copyto(shared_clusters, self.clusters) #this array is static, only copy once
 
-            # For the intra and inter distances, only copy them during iterations since they are updated dduring the local search
+            # For the intra and inter distances, only copy them during iterations since they are updated during the local search
             # Copy closest_distances_intra to shared memory
             closest_distances_intra_shm = shm.SharedMemory(create=True, size=self.closest_distances_intra.nbytes)
             shared_closest_distances_intra = np.ndarray(self.closest_distances_intra.shape, dtype=self.closest_distances_intra.dtype, buffer=closest_distances_intra_shm.buf)
@@ -1961,7 +1955,7 @@ class SolutionAverage(Solution):
         add_within_cluster: list of tuples
             The changes to be made within the cluster of the added point.
             Structure: [(index_to_change, new_closest_point, new_distance)]
-            NOTE: new_closest_point will always be idx_to_add
+            NOTE: new_closest_point will always be idx_to_add.
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
             Structure: [(index_other_cluster, new_numerator, new_denominator)]
@@ -1987,7 +1981,7 @@ class SolutionAverage(Solution):
         if candidate_objective > self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD and local_search:
             return np.inf, None, None
 
-        # Inter cluster distances for other clusters
+        # Inter-cluster distances for other clusters
         add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
         for other_cluster in self.unique_clusters:
             if other_cluster != cluster:
@@ -2003,41 +1997,6 @@ class SolutionAverage(Solution):
                 add_for_other_clusters.append((other_cluster, new_numerator, new_denominator))
                 
         return candidate_objective, add_within_cluster, add_for_other_clusters
-
-    def accept_add(self, idx_to_add: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
-        """
-        Accepts the addition of a point to the solution.
-        NOTE: this assumes that the initial solution
-        was feasible.
-
-        PARAMETERS:
-        -----------
-        idx_to_add: int
-            The index of the point to be added.
-        candidate_objective: float
-            The objective value of the solution after the addition.
-        add_within_cluster: list of tuples
-            The changes to be made within the cluster of the added point.
-            Structure: [(index_to_change, new_distance)]
-        add_for_other_clusters: list of tuples
-            The changes to be made for other clusters.
-            Structure: [(index_other_cluster, new_numerator, new_denominator)]
-        """
-        cluster = self.clusters[idx_to_add]
-        # Update selected points
-        self.selection[idx_to_add] = True
-        self.selection_per_cluster[cluster].add(idx_to_add)
-        self.nonselection_per_cluster[cluster].remove(idx_to_add) #explicitly remove instead of discard since it should throw an error if not selected
-        # Update intra cluster distances (add_within_cluster)
-        for idx, dist in add_within_cluster:
-            self.closest_distances_intra[idx] = dist
-            self.closest_points_intra[idx] = idx_to_add
-        # Update inter cluster distances (add_for_other_clusters)
-        for other_cluster, new_numerator, new_denominator in add_for_other_clusters:
-            self.distances_inter_numerator[get_index(cluster, other_cluster, self.num_clusters)] = new_numerator
-            self.distances_inter_denominator[get_index(cluster, other_cluster, self.num_clusters)] = new_denominator
-        # Update objective value
-        self.objective = candidate_objective
 
     def evaluate_swap(self, idxs_to_add, idx_to_remove: int):
         """
@@ -2055,12 +2014,15 @@ class SolutionAverage(Solution):
         --------
         candidate_objective: float
             The objective value of the solution after the swap.
+            NOTE: if the addition does not improve the objective, -1 is returned.
         add_within_cluster: list of tuples
             The changes to be made within the cluster of the added point.
             Structure: [(index_to_change, new_closest_point, new_distance)]
+            NOTE: if the addition does not improve the objective, -1 is returned.
         add_for_other_clusters: list of tuples
             The changes to be made for other clusters.
             Structure: [(index_other_cluster, new_numerator, new_denominator)]
+            NOTE: if the addition does not improve the objective, -1 is returned.
         """
         if not self.feasible:
             raise ValueError("The solution is infeasible, cannot evaluate addition.")
@@ -2134,51 +2096,6 @@ class SolutionAverage(Solution):
 
         return candidate_objective, add_within_cluster, add_for_other_clusters
 
-    def accept_swap(self, idxs_to_add, idx_to_remove: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
-        """
-        Accepts the swap of the pair of points in the solution.
-        NOTE: this assumes that the initial solution
-        was feasible.
-
-        PARAMETERS:
-        -----------
-        idxs_to_add: int or list of int
-            The index or indices of the point(s) to be added.
-        idx_to_remove: int
-            The index of the point to be removed.
-        candidate_objective: float
-            The objective value of the solution after the addition.
-        add_within_cluster: list of tuples
-            The changes to be made within the cluster of the added point.
-            Structure: [(index_to_change, new_closest_point, new_distance)]
-        add_for_other_clusters: list of tuples
-            The changes to be made for other clusters.
-            Structure: [(other_cluster_index, new_numerator, new_denominator)]
-        """
-        try:
-            num_to_add = len(idxs_to_add)
-        except TypeError: #assumption is that this is an int
-            num_to_add = 1
-            idxs_to_add = [idxs_to_add]
-        cluster = self.clusters[idx_to_remove]
-        for idx_to_add in idxs_to_add:
-            self.selection[idx_to_add] = True
-            self.selection_per_cluster[cluster].add(idx_to_add)
-            self.nonselection_per_cluster[cluster].remove(idx_to_add)
-        self.selection[idx_to_remove] = False
-        self.selection_per_cluster[cluster].remove(idx_to_remove)
-        self.nonselection_per_cluster[cluster].add(idx_to_remove)
-        # Update intra cluster distances (add_within_cluster)
-        for idx, new_closest_point, new_distance in add_within_cluster:
-            self.closest_distances_intra[idx] = new_distance
-            self.closest_points_intra[idx] = new_closest_point
-        # Update inter cluster distances (add_for_other_clusters)
-        for other_cluster, new_numerator, new_denominator in add_for_other_clusters:
-            self.distances_inter_numerator[get_index(cluster, other_cluster, self.num_clusters)] = new_numerator
-            self.distances_inter_denominator[get_index(cluster, other_cluster, self.num_clusters)] = new_denominator
-        # Update objective value
-        self.objective = candidate_objective
-
     def evaluate_remove(self, idx_to_remove: int, local_search: bool = False):
         """
         Evaluates the effect of removing a selected point from the solution.
@@ -2246,82 +2163,14 @@ class SolutionAverage(Solution):
             if cur_closest_point == idx_to_remove:
                 cur_closest_distance = np.inf
                 for other_idx in new_selection:
-                    if other_idx != idx:
-                        cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
-                        if cur_dist < cur_closest_distance:
-                            cur_closest_distance = cur_dist
-                            cur_closest_point = other_idx
+                    cur_dist = get_distance(idx, other_idx, self.distances, self.num_points)
+                    if cur_dist < cur_closest_distance:
+                        cur_closest_distance = cur_dist
+                        cur_closest_point = other_idx
                 candidate_objective += cur_closest_distance - self.closest_distances_intra[idx]
                 add_within_cluster.append((idx, cur_closest_point, cur_closest_distance))
         
         return candidate_objective, add_within_cluster, add_for_other_clusters
-
-    def accept_remove(self, idx_to_remove: int, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
-        """
-        Accepts the addition of a point to the solution.
-        NOTE: this assumes that the initial solution
-        was feasible.
-
-        PARAMETERS:
-        -----------
-        idx_to_remove: int
-            The index of the point to be removed.
-        candidate_objective: float
-            The objective value of the solution after the removal.
-        add_within_cluster: list of tuples
-            The changes to be made within the cluster of the removed point.
-            Structure: [(index_to_change, new_closest_point, new_distance)]
-        add_for_other_clusters: list of tuples
-            The changes to be made for other clusters.
-            Structure: [(other_cluster_index, new_numerator, new_denominator)]
-        """
-        cluster = self.clusters[idx_to_remove]
-        # Update selected points
-        self.selection[idx_to_remove] = False
-        self.selection_per_cluster[cluster].remove(idx_to_remove)
-        self.nonselection_per_cluster[cluster].add(idx_to_remove)
-        # Update intra cluster distances (add_within_cluster)
-        for idx, new_closest_point, dist in add_within_cluster:
-            self.closest_distances_intra[idx] = dist
-            self.closest_points_intra[idx] = new_closest_point
-        # Update inter cluster distances (add_for_other_clusters)
-        for other_cluster, new_numerator, new_denominator in add_for_other_clusters:
-            self.distances_inter_numerator[get_index(cluster, other_cluster, self.num_clusters)] = new_numerator
-            self.distances_inter_denominator[get_index(cluster, other_cluster, self.num_clusters)] = new_denominator
-        # Update objective value
-        self.objective = candidate_objective
-
-    def accept_move_old(self, move_type: str, move_content, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
-        """
-        Accepts a move to the solution.
-        NOTE: This assumes that the initial solution and the move
-        are feasible and will not check for this.
-
-        PARAMETERS:
-        -----------
-        move_type: str
-            The type of the move (e.g., "add", "swap", "doubleswap", "remove").
-        move_content: int or tuple
-            The content of the move (e.g., index to add, indices to swap).
-        candidate_objective: float
-            The objective value of the solution after the move.
-        add_within_cluster: list of tuples
-            The changes to be made within the cluster of the added point.
-            Structure: [(index_to_change, new_closest_point, new_distance)]
-        add_for_other_clusters: list of tuples
-            The changes to be made for other clusters.
-            Structure: [(index_other_cluster, cur_closest_pair, new_distance)]
-            Note that for cur_closest_pair, the first index is in the cluster with lowest index.
-        """
-        if move_type == "add":
-            idx_to_add = move_content
-            self.accept_add(idx_to_add, candidate_objective, add_within_cluster, add_for_other_clusters)
-        elif move_type == "swap" or move_type == "doubleswap":
-            idxs_to_add, idx_to_remove = move_content
-            self.accept_swap(idxs_to_add, idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
-        elif move_type == "remove":
-            idx_to_remove = move_content
-            self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
 
     def accept_move(self, idxs_to_add: list, idxs_to_remove: list, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
@@ -2392,12 +2241,6 @@ class SolutionAverage(Solution):
             The maximum runtime in seconds for the local search.
         num_cores: int
             The number of cores to use for parallel processing.
-            NOTE: if set to 1, local search will always run in
-            single processor mode, even if hybrid is True.
-        hybrid: bool
-            If True, local search will switch to multiprocessing
-            after num_switch consecutive iterations take longer
-            than runtime_switch seconds.
         random_move_order: bool
             If True, the order of moves (add, swap, doubleswap,
             remove) is randomized.
@@ -2523,7 +2366,7 @@ class SolutionAverage(Solution):
             shared_clusters = np.ndarray(self.clusters.shape, dtype=self.clusters.dtype, buffer=clusters_shm.buf)
             np.copyto(shared_clusters, self.clusters) #this array is static, only copy once
 
-            # For the intra and inter distances, only copy them during iterations since they are updated dduring the local search
+            # For the intra and inter distances, only copy them during iterations since they are updated during the local search
             # Copy closest_distances_intra to shared memory
             closest_distances_intra_shm = shm.SharedMemory(create=True, size=self.closest_distances_intra.nbytes)
             shared_closest_distances_intra = np.ndarray(self.closest_distances_intra.shape, dtype=self.closest_distances_intra.dtype, buffer=closest_distances_intra_shm.buf)
@@ -2581,18 +2424,24 @@ class SolutionAverage(Solution):
                         for move_type, move_content in move_generator:
                             move_counter += 1
                             if move_type == "add":
-                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(move_content, local_search=True)
+                                idx_to_add = move_content
+                                idxs_to_add = [idx_to_add]
+                                idxs_to_remove = []
+                                candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_add(idx_to_add, local_search=True)
                                 if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
                                     break
                             elif move_type == "swap" or move_type == "doubleswap":
                                 idxs_to_add, idx_to_remove = move_content
+                                idxs_to_remove = [idx_to_remove]
                                 candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_swap(idxs_to_add, idx_to_remove)
                                 if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
                                     break
                             elif move_type == "remove":
+                                idxs_to_add = []
                                 idx_to_remove = move_content
+                                idxs_to_remove = [idx_to_remove]
                                 candidate_objective, add_within_cluster, add_for_other_clusters = self.evaluate_remove(idx_to_remove, local_search=True)
                                 if candidate_objective < self.objective and np.abs(candidate_objective - self.objective) > PRECISION_THRESHOLD:
                                     solution_changed = True
@@ -2664,7 +2513,7 @@ class SolutionAverage(Solution):
 
                                     if len(results) > 0: #if improvement is found, stop processing batches
                                         solution_changed = True
-                                        move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters = results[0]
+                                        move_type, idxs_to_add, idxs_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters = results[0]
                                         break
                                     else:
                                         num_solutions_tried += num_this_loop
@@ -2679,7 +2528,8 @@ class SolutionAverage(Solution):
 
                         time_per_iteration.append(time.time() - current_iteration_time)
                         if solution_changed: # If improvement is found, update solution
-                            self.accept_move(move_type, move_content, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            self.accept_move(idxs_to_add, idxs_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+                            del idxs_to_add, idxs_to_remove #sanity check, should throw error if something weird happens
                             iteration += 1 #update iteration count
                             # Check if time exceeds allowed runtime
                             if time.time() - start_time > max_runtime:
@@ -2789,10 +2639,12 @@ def evaluate_add_mp(
         The changes to be made within the cluster of the added point.
         Structure: [(index_to_change, new_closest_point, new_distance)]
         NOTE: new_closest_point will always be idx_to_add.
+        NOTE: if the addition does not improve the objective, -1 is returned.
     add_for_other_clusters: list of tuples
         The changes to be made for other clusters.
         Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
         NOTE: point_in_this_cluster will always be idx_to_add.
+        NOTE: if the addition does not improve the objective, -1 is returned.
     """
     cluster = _clusters[idx_to_add]
 
@@ -2856,24 +2708,41 @@ def evaluate_add_mp_avg(
         nonselection: set
             A set of indices of points (in the cluster of the point to be added) that are currently 
             not selected in the solution.
+
+        Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the addition.
+            NOTE: if the addition does not improve the objective, -1 is returned.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+            NOTE: new_closest_point will always be idx_to_add.
+            NOTE: if the addition does not improve the objective, -1 is returned.
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_numerator, new_denominator)]
+            NOTE: if the addition does not improve the objective, -1 is returned.
         """
         cluster = _clusters[idx_to_add]
+
+        # Calculate selection cost
         candidate_objective = objective + _cost_per_cluster[cluster] # cost for adding the point
         
-        # Intra cluster distances for same cluster
+        # Calculate intra-cluster distances
         add_within_cluster = [] #this stores changes that have to be made if the objective improves
         for idx in nonselection:
             cur_dist = get_distance(idx, idx_to_add, _distances, _num_points) # distance to current point (idx)
             if cur_dist < _closest_distances_intra[idx]:
                 candidate_objective += cur_dist - _closest_distances_intra[idx]
-                add_within_cluster.append((idx, cur_dist))
+                add_within_cluster.append((idx, idx_to_add, cur_dist))
 
-        # Inter cluster distances for other clusters
-        # NOTE: This can only increase the inter cluster cost, so if objective is already worse, we can skip this
-        add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
+        # NOTE: Inter-cluster distances can only increase when adding a point, so when doing local search we can exit here if objective is worse
         if candidate_objective > objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
-            return -1, -1, -1 #-1, -1, -1 to signify no improvement
+            return -1, -1, -1
         
+        # Inter-cluster distances for other clusters
+        add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
         for other_cluster in _unique_clusters:
             if other_cluster != cluster:
                 old_numerator = get_distance(cluster, other_cluster, _distances_inter_numerator, _num_clusters)
@@ -2890,7 +2759,7 @@ def evaluate_add_mp_avg(
         if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
             return candidate_objective, add_within_cluster, add_for_other_clusters
         else:
-            return -1, -1, -1  # -1, -1, -1 to signify no improvement
+            return -1, -1, -1
 
 def evaluate_swap_mp(
         idxs_to_add: list, idx_to_remove: int, objective: float,
@@ -2921,14 +2790,16 @@ def evaluate_swap_mp(
     Returns:
     --------
     candidate_objective: float
-        The objective value of the solution after the addition.
-        NOTE: if the addition does not improve the objective, -1 is returned.
+        The objective value of the solution after the swap.
+        NOTE: if the swap does not improve the objective, -1 is returned.
     add_within_cluster: list of tuples
         The changes to be made within the cluster of the added point.
         Structure: [(index_to_change, new_closest_point, new_distance)]
+        NOTE: if the swap does not improve the objective, -1 is returned.
     add_for_other_clusters: list of tuples
         The changes to be made for other clusters.
         Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
+        NOTE: if the swap does not improve the objective, -1 is returned.
     """
     try:
         num_to_add = len(idxs_to_add)
@@ -3004,7 +2875,7 @@ def evaluate_swap_mp_avg(
         idxs_to_add, idx_to_remove: int, objective: float,
         selection_per_cluster: dict, nonselection: set):
     """
-    Evaluates the effect of swapping a selected point for an unselected point (or multiple)
+    Evaluates the effect of swapping a selected point for a/multiple unselected point(s)
     in the solution.
     NOTE: this function relies on shared memory, as well as existing variables that
     have to be initialized (those starting with an underscore) when spawning a worker
@@ -3027,6 +2898,20 @@ def evaluate_swap_mp_avg(
     nonselection: set
         A set of indices of points (in the cluster of the point to be removed) that are currently 
         not selected in the solution.
+
+    Returns:
+        --------
+        candidate_objective: float
+            The objective value of the solution after the swap.
+            NOTE: if the swap does not improve the objective, -1 is returned.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+            NOTE: if the swap does not improve the objective, -1 is returned.
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_numerator, new_denominator)]
+            NOTE: if the swap does not improve the objective, -1 is returned.
     """
     try:
         num_to_add = len(idxs_to_add)
@@ -3034,7 +2919,7 @@ def evaluate_swap_mp_avg(
         num_to_add = 1
         idxs_to_add = [idxs_to_add]
     cluster = _clusters[idx_to_remove]
-    candidate_objective = objective + (num_to_add - 1) * _cost_per_cluster[cluster] # cost for adding and removing
+
     # Generate pool of alternative points to compare to
     new_selection = set(selection_per_cluster[cluster])
     for idx in idxs_to_add:
@@ -3043,7 +2928,10 @@ def evaluate_swap_mp_avg(
     new_nonselection = set(nonselection)
     new_nonselection.add(idx_to_remove)
 
-    # Calculate intra cluster distances for cluster of new point
+    # Calculate selection cost
+    candidate_objective = objective + (num_to_add - 1) * _cost_per_cluster[cluster] # cost for adding and removing
+
+    # Calculate intra-cluster distances
     add_within_cluster = []
     for idx in new_nonselection:
         cur_closest_distance = _closest_distances_intra[idx]
@@ -3064,7 +2952,7 @@ def evaluate_swap_mp_avg(
                 candidate_objective += cur_dist - cur_closest_distance
                 add_within_cluster.append((idx, idx_to_add, cur_dist))
 
-    # Calculate inter cluster distances for all other clusters
+    # Calculate inter-cluster distances for all other clusters
     add_for_other_clusters = []
     for other_cluster in _unique_clusters:
         if other_cluster != cluster:
@@ -3073,10 +2961,12 @@ def evaluate_swap_mp_avg(
             new_numerator = old_numerator
             new_denominator = old_denominator
             for idx in selection_per_cluster[other_cluster]:
+                # Similarities for point(s) to add
                 for idx_to_add in idxs_to_add:
                     cur_similarity = 1.0 - get_distance(idx, idx_to_add, _distances, _num_points)
                     new_numerator += cur_similarity * math.exp(cur_similarity * _beta - _logsum_factor)
                     new_denominator += math.exp(cur_similarity * _beta - _logsum_factor)
+                # Similarities for point to remove
                 cur_similarity = 1.0 - get_distance(idx, idx_to_remove, _distances, _num_points)
                 new_numerator -= cur_similarity * math.exp(cur_similarity * _beta - _logsum_factor)
                 new_denominator -= math.exp(cur_similarity * _beta - _logsum_factor)
@@ -3086,7 +2976,7 @@ def evaluate_swap_mp_avg(
     if candidate_objective < objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
         return candidate_objective, add_within_cluster, add_for_other_clusters
     else:
-        return -1, -1, -1  # -1, -1, -1 to signify no improvement
+        return -1, -1, -1
 
 def evaluate_remove_mp(
         idx_to_remove: int, objective: float,
@@ -3115,14 +3005,16 @@ def evaluate_remove_mp(
     Returns:
     --------
     candidate_objective: float
-        The objective value of the solution after the addition.
-        NOTE: if the addition does not improve the objective, -1 is returned.
+        The objective value of the solution after the removal.
+        NOTE: if the removal does not improve the objective, -1 is returned.
     add_within_cluster: list of tuples
-        The changes to be made within the cluster of the added point.
+        The changes to be made within the cluster of the removed point.
         Structure: [(index_to_change, new_closest_point, new_distance)]
+        NOTE: if the removal does not improve the objective, -1 is returned.
     add_for_other_clusters: list of tuples
         The changes to be made for other clusters.
         Structure: [(index_other_cluster, (point_in_this_cluster, point_in_other_cluster), new_distance)]
+        NOTE: if the removal does not improve the objective, -1 is returned.
     """
     cluster = _clusters[idx_to_remove]
 
@@ -3203,9 +3095,22 @@ def evaluate_remove_mp_avg(
     nonselection: set
         A set of indices of points (in the cluster of the point to be removed) that are currently 
         not selected in the solution.
+        
+    Returns:
+    --------
+    candidate_objective: float
+        The objective value of the solution after the removal.
+        NOTE: if the removal does not improve the objective, -1 is returned.
+    add_within_cluster: list of tuples
+        The changes to be made within the cluster of the removed point.
+        Structure: [(index_to_change, new_closest_point, new_distance)]
+        NOTE: if the removal does not improve the objective, -1 is returned.
+    add_for_other_clusters: list of tuples
+        The changes to be made for other clusters.
+        Structure: [(index_other_cluster, new_numerator, new_denominator)]
+        NOTE: if the removal does not improve the objective, -1 is returned.
     """
     cluster = _clusters[idx_to_remove]
-    candidate_objective = objective - _cost_per_cluster[cluster] # cost for removing the point from the cluster
 
     # Generate pool of alternative points to compare to
     new_selection = set(selection_per_cluster[cluster])
@@ -3213,10 +3118,12 @@ def evaluate_remove_mp_avg(
     new_nonselection = set(nonselection)
     new_nonselection.add(idx_to_remove)
 
-    """
-    Unlike other evaluate functions, we start by checking the inter-cluster distances first since
-    removing a point can only decrease the inter-cluster cost.
-    """
+    # Calculate selection cost
+    candidate_objective = objective - _cost_per_cluster[cluster] # cost for removing the point from the cluster
+
+    # Calculate inter-cluster distances for all other clusters
+    # NOTE: Intra-cluster distances can only increase when removing a point, Thus if inter-cluster distances
+    # increase, we can exit early.
     add_for_other_clusters = [] #this stores changes that have to be made if the objective improves
     for other_cluster in _unique_clusters:
         if other_cluster != cluster:
@@ -3231,14 +3138,13 @@ def evaluate_remove_mp_avg(
             candidate_objective += (new_numerator/new_denominator) - (old_numerator/old_denominator)
             add_for_other_clusters.append((other_cluster, new_numerator, new_denominator))
     
-    # NOTE: Intra-cluster distance can only increase when removing a point, so when doing local search we can exit here if objective is worse
+    # NOTE: Intra-cluster distances can only increase when removing a point, so when doing local search we can exit here if objective is worse
     if candidate_objective > objective and np.abs(candidate_objective - objective) > PRECISION_THRESHOLD:
         return -1, -1, -1
     
-    # Calculate intra cluster distances for cluster of removed point
+    # Calculate intra-cluster distances
     add_within_cluster = [] #this stores changes that have to be made if the objective improves
     for idx in new_nonselection:
-        cur_closest_distance = _closest_distances_intra[idx]
         cur_closest_point = _closest_points_intra[idx]
         if cur_closest_point == idx_to_remove:
             cur_closest_distance = np.inf
@@ -3461,7 +3367,7 @@ def process_batch(batch, event, selection_per_cluster, nonselection_per_cluster,
     Returns:
     --------
     tuple
-        A tuple containing the move type, indexes to add, indexes to remove, 
+        A tuple containing the move type, indices to add, indices to remove, 
         candidate objective, add_within_cluster, and add_for_other_clusters if 
         an improvement is found, otherwise (None, None, None, -1, None, None).
     """
@@ -3526,9 +3432,9 @@ def process_batch_avg(batch, event, selection_per_cluster, nonselection_per_clus
     Returns:
     --------
     tuple
-        A tuple containing the move type, move content, candidate objective,
-        add_within_cluster, and add_for_other_clusters if an improvement is found,
-        otherwise (None, None, -1, None, None).
+        A tuple containing the move type, indices to add, indices to remove, 
+        candidate objective, add_within_cluster, and add_for_other_clusters if 
+        an improvement is found, otherwise (None, None, None, -1, None, None).
     """
     global _distances, _clusters, _closest_distances_intra, _closest_points_intra, _distances_inter_numerator, _distances_inter_denominator
     global _unique_clusters, _num_points, _num_clusters, _beta, _logsum_factor
@@ -3537,7 +3443,7 @@ def process_batch_avg(batch, event, selection_per_cluster, nonselection_per_clus
     num_moves = 0
     for task, content in batch:
         if event.is_set():
-            return None, None, -1, None, None
+            return None, None, None, -1, None, None
         if task == "add":
             idx_to_add = content
             cluster = _clusters[idx_to_add]
@@ -3546,7 +3452,7 @@ def process_batch_avg(batch, event, selection_per_cluster, nonselection_per_clus
             if candidate_objective > -1:
                 num_improvements += 0
                 event.set()
-                return "add", content, candidate_objective, add_within_cluster, add_for_other_clusters
+                return "add", [idx_to_add], [], candidate_objective, add_within_cluster, add_for_other_clusters
         elif task == "swap" or task == "doubleswap":
             idxs_to_add, idx_to_remove = content
             cluster = _clusters[idx_to_remove]
@@ -3555,7 +3461,7 @@ def process_batch_avg(batch, event, selection_per_cluster, nonselection_per_clus
             if candidate_objective > -1:
                 num_improvements += 1
                 event.set()
-                return task, content, candidate_objective, add_within_cluster, add_for_other_clusters
+                return task, list(idxs_to_add), [idx_to_remove], candidate_objective, add_within_cluster, add_for_other_clusters
         elif task == "remove":
             idx_to_remove = content
             cluster = _clusters[idx_to_remove]
@@ -3564,9 +3470,9 @@ def process_batch_avg(batch, event, selection_per_cluster, nonselection_per_clus
             if candidate_objective > -1:
                 num_improvements += 1
                 event.set()
-                return "remove", content, candidate_objective, add_within_cluster, add_for_other_clusters
+                return "remove", [], [idx_to_remove], candidate_objective, add_within_cluster, add_for_other_clusters
 
-    return None, None, -1, None, None
+    return None, None, None, -1, None, None
 
 def process_batch_result(result, results_list):
     """
