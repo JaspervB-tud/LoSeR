@@ -2291,7 +2291,7 @@ class SolutionAverage(Solution):
         # Update objective value
         self.objective = candidate_objective
 
-    def accept_move(self, move_type: str, move_content, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
+    def accept_move_old(self, move_type: str, move_content, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
         """
         Accepts a move to the solution.
         NOTE: This assumes that the initial solution and the move
@@ -2322,6 +2322,55 @@ class SolutionAverage(Solution):
         elif move_type == "remove":
             idx_to_remove = move_content
             self.accept_remove(idx_to_remove, candidate_objective, add_within_cluster, add_for_other_clusters)
+
+    def accept_move(self, idxs_to_add: list, idxs_to_remove: list, candidate_objective: float, add_within_cluster: list, add_for_other_clusters: list):
+        """
+        Accepts a move to the solution, where multiple points can be added and removed at once.
+        NOTE: This assumes that the initial solution and the move
+        are feasible and will not check for this.
+
+        PARAMETERS:
+        -----------
+        idxs_to_add: list of int
+            The indices of the points to be added.
+            NOTE: This assumes that all indices to be added are in the same cluster (which should be the same as the indices to remove)!
+        idxs_to_remove: list of int
+            The indices of the points to be removed.
+            NOTE: This assumes that all indices to be removed are in the same cluster (which should be the same as the indices to add)!
+        candidate_objective: float
+            The objective value of the solution after the move.
+        add_within_cluster: list of tuples
+            The changes to be made within the cluster of the added point.
+            Structure: [(index_to_change, new_closest_point, new_distance)]
+        add_for_other_clusters: list of tuples
+            The changes to be made for other clusters.
+            Structure: [(index_other_cluster, new_numerator, new_denominator)]
+        """
+        found_clusters = set()
+        for idx in idxs_to_add + idxs_to_remove:
+            found_clusters.add(self.clusters[idx])
+        if len(found_clusters) != 1:
+            raise ValueError("All points to add and remove must be in the same cluster.")
+        cluster = found_clusters.pop()
+        # Updating state attributes of this solution object
+        for idx_to_add in idxs_to_add:
+            self.selection[idx_to_add] = True
+            self.selection_per_cluster[cluster].add(idx_to_add)
+            self.nonselection_per_cluster[cluster].remove(idx_to_add)
+        for idx_to_remove in idxs_to_remove:
+            self.selection[idx_to_remove] = False
+            self.selection_per_cluster[cluster].remove(idx_to_remove)
+            self.nonselection_per_cluster[cluster].add(idx_to_remove)
+        # Updating intra-cluster distances and points
+        for idx_to_change, new_closest_point, new_distance in add_within_cluster:
+            self.closest_distances_intra[idx_to_change] = new_distance
+            self.closest_points_intra[idx_to_change] = new_closest_point
+        # Updating inter-cluster numerators and denominators
+        for other_cluster, new_numerator, new_denominator in add_for_other_clusters:
+            self.distances_inter_numerator[get_index(cluster, other_cluster, self.num_clusters)] = new_numerator
+            self.distances_inter_denominator[get_index(cluster, other_cluster, self.num_clusters)] = new_denominator
+        
+        self.objective = candidate_objective
 
     def local_search_mp(self, 
                         max_iterations: int = 10_000, max_runtime: float = np.inf,
