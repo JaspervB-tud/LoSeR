@@ -1,3 +1,6 @@
+# **Lo**cal **Se**arch for **R**eference genome selection
+
+
 The objective of this document, is to detail how I proceeded to do things.
 
 * DOWNLOADING DATA
