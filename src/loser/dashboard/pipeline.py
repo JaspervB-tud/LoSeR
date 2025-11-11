@@ -9,8 +9,10 @@ from multiprocessing import Pool, cpu_count
 from ..solution import Solution
 
 SelectionMethod = Literal["random", "centroid"]
+SeqPath = "/Users/jaspervanbemmelen/Documents/Projects/Reference Optimization/GISAID_downloaded-23-05-2025_dates-01-07-2024_31-12-2024/sequences.fasta"
+ClustPath = "/Users/jaspervanbemmelen/Documents/Projects/Reference Optimization/GISAID_downloaded-23-05-2025_dates-01-07-2024_31-12-2024/clusters.tsv"
 
-def read_fasta(filepath: str, min_length: int = 0) -> dict[str], list[str]:
+def read_fasta(filepath: str, min_length: int = 0):
     """
     Reads a multi-FASTA file and returns a dictionary mapping sequence IDs to sequences.
 
@@ -26,8 +28,6 @@ def read_fasta(filepath: str, min_length: int = 0) -> dict[str], list[str]:
     --------
     genomes: dict [str] -> (SeqRecord, str, sourmash.MinHash)
         Dictionary mapping sequence IDs in the FASTA file to their corresponding sequences.
-    genome_ids: list[str]
-        List of sequence IDs.
     """
     genomes = {}
     for record in SeqIO.parse(filepath, "fasta"):
@@ -40,10 +40,36 @@ def read_fasta(filepath: str, min_length: int = 0) -> dict[str], list[str]:
                 "sequence": cur_seq,
                 "minhash": mh
             }
-    genome_ids = sorted(list(genomes.keys()))
-    return genomes, genome_ids
+    return genomes
 
-def determine_clusters(filepath: str, genomes: dict, genome_ids: list) -> dict[str]:
+def determine_clusters(filepath: str, genomes: dict):
     """
     Reads a clustering file and returns an updated version of the genomes dictionary with cluster information.
+    NOTE: For now this assumes that the clustering file is in tab-separated format with two columns:
+        - sequence ID
+        - cluster name (to be converted into ID later)
+
+    Parameters:
+    -----------
+    filepath: str
+        Path to the clustering file.
+    genomes: dict[str]
+        Dictionary mapping sequence IDs to their corresponding sequences.
+
+    Returns:
+    --------
+    genomes: dict [str] -> (SeqRecord, str, sourmash.MinHash, str)
+        Updated dictionary mapping sequence IDs to their corresponding sequences and cluster information.
     """
+    with open(filepath, "r") as f_in:
+        for line in f_in:
+            seq_id, cluster_name = line.strip().split("\t")
+            if seq_id in genomes:
+                genomes[seq_id]["cluster"] = cluster_name
+            else:
+                print(f"Warning: sequence ID {seq_id} in clustering file not found in genomes.")
+
+    return genomes, cluster2idx, idx2cluster
+
+def print_t():
+    print("test")
