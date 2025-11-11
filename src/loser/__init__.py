@@ -6,7 +6,8 @@
 # Example: Importing modules or functions to make them accessible at the package level
 # from .module_name import some_function, SomeClass
 from .solution import Solution, SolutionAverage
+from importlib.metadata import version as _pkg_version
 
 __all__ = ["Solution", "SolutionAverage"]
 
-__version__ = "0.1.0"
+__version__ = _pkg_version("loser")
