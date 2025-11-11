@@ -10,7 +10,7 @@ version = "0.0.1"
 description = "Local Search for Reference genome selection"
 readme = "README_PYPI.md"
 requires-python = ">=3.13"
-##license = { file = "LICENSE" }
+license = { file = "LICENSE" }
 authors = [
   { name = "Jasper van Bemmelen", email = "jaspervanbemmelen@hotmail.com" }
 ]
@@ -27,12 +27,17 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://example.com/loser"
-Repository = "https://github.com/your-org/loser"
-Issues = "https://github.com/your-org/loser/issues"
+#Homepage = "https://example.com/loser"
+#Repository = "https://github.com/your-org/loser"
+#Issues = "https://github.com/your-org/loser/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
+
+# pytest initialization
+[tool.pytest.ini_options]
+pythonpath = ["src/loser"]
+addopts = "-p no:cacheprovider"
 
 [tool.hatch.build.targets.wheel]
 packages = [{ include = "loser", from = "src" }]

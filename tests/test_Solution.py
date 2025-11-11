@@ -1,4 +1,4 @@
-import solution.solution_optimized as solution
+import solution
 from scipy.spatial.distance import squareform
 # Global imports
 import numpy as np
