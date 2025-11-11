@@ -1,0 +1,51 @@
+## Created with copilot on 11/11/2025
+
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loser"
+version = "0.1.0"
+description = "Local Search for Reference genome selection"
+readme = "README_PYPI.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Jasper van Bemmelen", email = "jaspervanbemmelen@hotmail.com" }
+]
+dependencies = [
+    "numpy>=2.0,<3.0",
+    "scipy>=1.14,<2.0"
+]
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+#Homepage = "https://example.com/loser"
+#Repository = "https://github.com/your-org/loser"
+#Issues = "https://github.com/your-org/loser/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+# pytest initialization
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-p no:cacheprovider"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loser"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/loser",
+    "README_PYPI.md", 
+    "LICENSE", 
+    "tests", 
+]
