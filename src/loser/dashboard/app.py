@@ -69,10 +69,26 @@ def run_app():
             seq2index[seq_id] = len(index2seq)
             index2seq.append(seq_id)
 
+        # Find selected clusters (as index)
+        selected_clusters = []
+        for seq in index2seq:
+            cluster = genomes[seq]["cluster"]
+            cluster_idx = st.session_state["cluster2index"][cluster]
+            selected_clusters.append(cluster_idx)
+
         st.session_state["seq2index"] = seq2index
         st.session_state["index2seq"] = index2seq
         st.session_state["selected_genomes"] = selected
+        st.session_state["selected_clusters"] = selected_clusters
         print(f"Finished selecting genomes (selected {len(index2seq)} in total).")
+        # Check if distance matrix needs to be recomputed
+        last_params = st.session_state.get("_last_distance_params", None)
+        if last_params is not None:
+            if last_params != (st.session_state["seed"], st.session_state["max_genomes"]):
+                st.session_state["distance_matrix"] = None #invalidate distance matrix
+                st.session_state["_needs_distance_recompute"] = True
+            else:
+                st.session_state["_needs_distance_recompute"] = False
 
     @st.cache_data(show_spinner=True)
     def load_data(sequences_path, clusters_path):
@@ -129,7 +145,7 @@ def run_app():
 
     st.session_state.setdefault(
         "random_state",
-        None,
+        np.random.RandomState(st.session_state.get("seed", 0)),
     )
     st.number_input(
         "Random seed",
@@ -162,28 +178,262 @@ def run_app():
         print("Finished setting cores.")
 
     avail_cores = os.cpu_count() or 1
-    cores = st.slider(
+    st.slider(
         "Number of CPU cores to use",
         min_value=1,
         max_value=avail_cores,
         value=min(1, avail_cores),
-        key="cores",
+        key="cores", #default value
         on_change=on_cores_change,
         step=1,
     )
-    """
-    # Downsample and calculate distances
-    if st.button("Downsample and calculate distances"):
+
+    # Distance matrix calculation
+    st.session_state.setdefault("distance_matrix", None)
+    st.session_state.setdefault("_last_distance_params", None)
+    if st.button("Calculate distances"):
+        print("Computing distance matrix...")
         start_time = time.time()
-        D, clusters, id2index, index2id = pipeline.downsample_and_compute_distances(genomes, max_genomes=max_genomes, cores=cores)
+        D = pipeline.compute_distances(
+            st.session_state["selected_genomes"],
+            st.session_state["index2seq"],
+            st.session_state["seq2index"],
+            cores=st.session_state["cores"],
+        )
         end_time = time.time()
-        st.success(f"Distance matrix computed ({end_time-start_time:.2f}s) for {len(index2id)} genomes across {len(set(clusters))} clusters.")
+        print(f"Finished computing distance matrix. Took {end_time-start_time:.2f}s.")
+        st.session_state["distance_matrix"] = D
+        st.success(f"Distance matrix computed ({end_time-start_time:.2f}s) for {len(st.session_state['index2seq'])} genomes.")
+        # Set up a state value that is used to check if the seed and number of genomes changed
+        st.session_state["_last_distance_params"] = (
+            st.session_state["seed"],
+            st.session_state["max_genomes"],
+        )
+        st.session_state["_needs_distance_recompute"] = False
+
+    # Display distance matrix if it exists
+    if st.session_state.get("distance_matrix") is not None:
+        D = st.session_state["distance_matrix"]
         labels = [
-            f"{index2id[i]} [{genomes[index2id[i]]['cluster']}]" for i in range(len(index2id))
+            f"{seq_id} [{st.session_state['selected_genomes'][seq_id]['cluster']}]" for seq_id in st.session_state["index2seq"]
         ]
         df = pd.DataFrame(D, index=labels, columns=labels)
         st.dataframe(df)
-    """
+
+    # After the button, show warning if parameters changed
+    if st.session_state.get("_needs_distance_recompute"):
+        st.error("Parameters changed: distance matrix invalidated. Click 'Calculate distances' to recompute.")
+
+    # --- Local Search Optimization ---
+    st.header("Local Search Optimization (LoSeR)")
+
+    if st.session_state.get("distance_matrix") is None:
+        st.info("Compute the distance matrix first to enable Local Search Optimization.")
+    else:
+        st.subheader("Initialize Solution")
+
+        init_method = st.radio(
+            "Select initialization method",
+            ["Random", "Centroid"],
+            horizontal=True
+        )
+        selection_cost = st.number_input(
+            "Cost for selecting a sequence",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.1,
+            step=0.0001,
+        )
+        # Set parameters if initialization method is Random
+        if init_method == "Random":
+            fraction = st.slider(
+                "Fraction of sequences to select (will select at least one per cluster)",
+                min_value=0.01,
+                max_value=1.0,
+                value=0.5,
+                step=0.01,
+            )
+        
+        if st.button("Initialize Solution"):
+            from loser.solution import Solution
+
+            D = st.session_state["distance_matrix"]
+            cluster_assignments = np.array(st.session_state["selected_clusters"], dtype=np.int32)
+            n = len(cluster_assignments)
+
+            rng = st.session_state["random_state"]
+            if init_method == "Random": #Random
+                sol = Solution.generate_random_solution(
+                    D,
+                    cluster_assignments,
+                    selection_cost=selection_cost,
+                    max_fraction=fraction,
+                    seed=rng,
+                )
+                st.success(f"Random solution initialized with {np.sum(sol.selection)}/{n} sequences selected.")
+                st.session_state["solution"] = sol
+                st.session_state["_solution_initialized"] = True
+            else: #Centroid
+                sol = Solution.generate_centroid_solution(
+                    D,
+                    cluster_assignments,
+                    selection_cost=selection_cost,
+                )
+                st.success(f"Centroid solution initialized with {np.sum(sol.selection)}/{n} sequences selected.")
+                st.session_state["solution"] = sol
+                st.session_state["_solution_initialized"] = True
+            st.success(f"**Initial objective value:** {sol.objective:.4f}")
+
+        if st.session_state.get("_solution_initialized", False):
+            st.divider()
+
+            sol = st.session_state["solution"] 
+
+            col1, col2 = st.columns(2)
+            with col1:
+                max_iterations = st.number_input(
+                    "Max iterations for local search",
+                    min_value=1,
+                    #max_value=10_000,
+                    value=1000,
+                    step=1,
+                )
+            with col2:
+                max_runtime = st.number_input(
+                    "Max runtime (seconds) for local search",
+                    min_value=1,
+                    #max_value=10_000,
+                    value=60,
+                    step=1,
+                )
+            st.subheader("Move Types")
+            col1, col2, col3, col4 = st.columns(4)
+            move_add = col1.checkbox("Add", value=True)
+            move_remove = col2.checkbox("Remove", value=True)
+            move_swap = col3.checkbox("Swap", value=True)
+            move_doubleswap = col4.checkbox("Double swap", value=True)
+
+            # Build move order list
+            move_order = []
+            if move_add:
+                move_order.append("add")
+            if move_swap:
+                move_order.append("swap")
+            if move_doubleswap:
+                move_order.append("doubleswap")
+            if move_remove:
+                move_order.append("remove")
+
+            # Validate at least one move type is selected
+            if len(move_order) == 0:
+                st.error("Select at least one move type to perform local search!!!")
+            else:
+                st.write(f"Selected move types: {', '.join(move_order)}")
+
+            if st.button("Run Local Search!", disabled=(len(move_order) == 0)):
+                with st.spinner("Running local search..."):
+                    start_time = time.time()
+                    if st.session_state.get("cores", 1) > 1:
+                        sol.local_search_sp(
+                            max_iterations = max_iterations,
+                            max_runtime = max_runtime,
+                            move_order = move_order,
+                            logging = True,
+                            logging_frequency = 10
+                        )
+                    else:
+                        sol.local_search_mp(
+                            max_iterations = max_iterations,
+                            max_runtime = max_runtime,
+                            num_cores = st.session_state["cores"],
+                            move_order = move_order,
+                            logging = True,
+                            logging_frequency = 10
+                        )
+                    end_time = time.time()
+
+                st.success(f"Local search completed in {end_time-start_time:.2f}s.")
+                st.success(f"**Final objective value:** {sol.objective:.4f}")
+                st.success(f"**Sequences selected:** {np.sum(sol.selection)}/{len(sol.selection)}")
+                st.session_state["solution"] = sol
+                st.session_state["_solution_optimized"] = True
+
+            if st.session_state.get("_solution_optimized", False):
+                st.divider()
+                st.subheader("Cluster View")
+
+                sol = st.session_state["solution"]
+
+                # Get all genomes and cluster info
+                all_genomes = st.session_state["genomes"]
+                all_clusters = st.session_state["clusters"]
+                selected_genomes = st.session_state["selected_genomes"]
+                index2seq = st.session_state["index2seq"]
+                seq2index = st.session_state["seq2index"]
+
+                # Get selected sequence IDs
+                selected_indices = np.where(sol.selection)[0]
+                selected_seq_ids = set(index2seq[idx] for idx in selected_indices)
+                included_seq_ids = set(index2seq)
+
+                # Cluster selector
+                cluster_names = sorted(all_clusters.keys())
+                selected_cluster = st.selectbox(
+                    "Select cluster to view",
+                    cluster_names,
+                    key="cluster_view_selector"
+                )
+
+                # Get sequences in this cluster
+                cluster_seqs = all_clusters[selected_cluster]
+
+                st.write(f"**Cluster:** {selected_cluster}")
+                st.write(f"**Total sequences in cluster:** {len(cluster_seqs)}")
+                st.write(f"**Included in selection pool:** {sum(1 for seq in cluster_seqs if seq in included_seq_ids)}")
+                st.write(f"**Selected by optimizer:** {sum(1 for seq in cluster_seqs if seq in selected_seq_ids)}")
+                
+                # Build styled dataframe
+                data = []
+                for seq_id in cluster_seqs:
+                    is_included = seq_id in included_seq_ids
+                    is_selected = seq_id in selected_seq_ids
+                    
+                    if is_selected:
+                        status = "✅ Selected"
+                        style = "included_selected"
+                    elif is_included:
+                        status = "⚪ Included (not selected)"
+                        style = "included_not_selected"
+                    else:
+                        status = "○ Not included"
+                        style = "not_included"
+                    
+                    data.append({
+                        "Sequence ID": seq_id,
+                        "Status": status,
+                        "_style": style
+                    })
+                
+                df = pd.DataFrame(data)
+                
+                # Display with custom styling using HTML
+                def style_row(row):
+                    style_val = df.loc[row.name, "_style"]
+                    if style_val == "included_selected":
+                        return ['font-weight: bold; color: #00AA00;'] * 2
+                    elif style_val == "included_not_selected":
+                        return [''] * 2
+                    else:  # not_included
+                        return ['opacity: 0.4; color: #888888;'] * 2
+                
+                styled_df = df[["Sequence ID", "Status"]].style.apply(style_row, axis=1)
+                st.dataframe(styled_df, use_container_width=True, height=400)
+
+
+
+            
+
+            
 
 def _in_streamlit():
     try:

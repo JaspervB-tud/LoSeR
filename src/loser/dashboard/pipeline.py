@@ -136,44 +136,47 @@ def _compute_distance(pair):
     d = _minhashes[_index2id[i]].similarity(_minhashes[_index2id[j]])
     return i, j, 1.0-d
 
-def downsample_and_compute_distances(genomes: dict, max_genomes: int = np.inf, cores: int = 1):
-    id2index = {}
-    index2id = []
-    unique_clusters = sorted(list(set(genomes[seq_id]["cluster"] for seq_id in genomes)))
-    clusters = []
-    sequences_per_cluster = {}
-    idx = 0
-    # Start with indexing and downsampling
-    for seq_id in genomes:
-        cur_cluster = genomes[seq_id]["cluster"]
-        if cur_cluster not in sequences_per_cluster:
-            sequences_per_cluster[cur_cluster] = []
-        if len(sequences_per_cluster[cur_cluster]) < max_genomes:
-            id2index[seq_id] = idx
-            index2id.append(seq_id)
-            sequences_per_cluster[cur_cluster].append(seq_id)
-            clusters.append(unique_clusters.index(cur_cluster))
-            idx += 1
-    # Calculate pairwise distances
-    D = np.zeros((idx, idx), dtype=np.float32)
-    if idx <= 1:
-        return D, clusters, id2index, index2id
+def compute_distances(genomes: dict, index2seq: list, seq2index: dict, cores: int = 1):
+    """
+    Computes the pairwise distance matrix between genomes based on their MinHash sketches.
 
-    if cores == 1:  #single core
-        for i in range(idx):
-            for j in range(i):
-                d = 1.0 - genomes[index2id[i]]["minhash"].similarity(genomes[index2id[j]]["minhash"])
-                D[i,j] = d
-                D[j,i] = d
-    else:   #multi-core
-        pairs = combinations(range(idx), 2)
-        minhashes = {seq_id: genomes[seq_id]["minhash"] for seq_id in index2id}
-        ctx = get_context("spawn")
-        with ctx.Pool(processes=cores, initializer=_init_pool, initargs=(minhashes, index2id)) as pool:
-            for i, j, d in pool.imap_unordered(_compute_distance, pairs, chunksize=2_048): #chunk this as to not overload memory
-                D[i,j] = d
-                D[j,i] = d
-    return D, clusters, id2index, index2id
+    Parameters:
+    -----------
+    genomes: dict[str]
+        Dictionary mapping sequence IDs to their corresponding sequences and MinHash sketches.
+    index2seq: list[str]
+        List mapping indices to sequence IDs.
+    seq2index: dict[str, int]
+        Dictionary mapping sequence IDs to their corresponding indices.
+    cores: int
+        Number of CPU cores to use for parallel computation. Default is 1 (single-core).
+
+    Returns:
+    --------
+    D: np.ndarray
+        Pairwise distance matrix between genomes.
+    """
+    n = len(index2seq)
+    D = np.zeros((n, n), dtype=np.float32)
+    if n <= 1:
+        return D
+    else:
+        if cores == 1: #single core
+            for i in range(n):
+                for j in range(i):
+                    d = 1.0 - genomes[index2seq[i]]["minhash"].similarity(genomes[index2seq[j]]["minhash"])
+                    D[i,j] = d
+                    D[j,i] = d
+        else:   #multi-core
+            pairs = combinations(range(n), 2)
+            minhashes = {seq_id: genomes[seq_id]["minhash"] for seq_id in index2seq}
+            ctx = get_context("spawn")
+            with ctx.Pool(processes=cores, initializer=_init_pool, initargs=(minhashes, index2seq)) as pool:
+                for i, j, d in pool.imap_unordered(_compute_distance, pairs, chunksize=2048):
+                    D[i,j] = d
+                    D[j,i] = d
+    return D
+
 
 def main():
     print()
