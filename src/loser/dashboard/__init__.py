@@ -1,2 +1,2 @@
-from .pipeline import read_fasta, determine_clusters, SelectionMethod, Solution
-__all__ = ["read_fasta", "determine_clusters", "SelectionMethod", "Solution"]
+from .pipeline import read_fasta, determine_clusters, downsample_and_compute_distances, SelectionMethod, Solution
+__all__ = ["read_fasta", "determine_clusters", "downsample_and_compute_distances", "SelectionMethod", "Solution"]
