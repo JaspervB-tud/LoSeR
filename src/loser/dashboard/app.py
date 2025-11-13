@@ -341,7 +341,7 @@ def run_app():
                             max_runtime = max_runtime,
                             move_order = move_order,
                             logging = True,
-                            logging_frequency = 10
+                            logging_frequency = 1000
                         )
                     else:
                         sol.local_search_mp(
@@ -350,7 +350,7 @@ def run_app():
                             num_cores = st.session_state["cores"],
                             move_order = move_order,
                             logging = True,
-                            logging_frequency = 10
+                            logging_frequency = 1000
                         )
                     end_time = time.time()
 
