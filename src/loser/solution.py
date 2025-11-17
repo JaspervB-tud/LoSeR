@@ -937,7 +937,7 @@ class Solution:
                         random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
                         batch_size: int = 1000, max_batches: int = 32, 
                         runtime_switch: float = 10.0,
-                        doubleswap_time_threshold: float = 1.0,
+                        doubleswap_time_threshold: float = 30.0,
                         logging: bool = False, logging_frequency: int = 500,
                         ):
         """
@@ -1111,7 +1111,7 @@ class Solution:
                         active_moves = move_order.copy() #list of move types for this iteration
 
                         move_counter = 0
-                        while active_moves and not in run_multiprocessing:
+                        while active_moves and not run_in_multiprocessing:
                             # Select next move type
                             if random_move_order:
                                 selected_generator = self.random_state.choice(active_moves)
@@ -1166,7 +1166,7 @@ class Solution:
                                 # Check if current iteration should switch to multiprocessing
                                 if time.time() - current_iteration_time > runtime_switch:
                                     if logging:
-                                        print(f"Iteration {iteration+1} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
+                                        print(f"Iteration {iteration} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
                                     run_in_multiprocessing = True
                                     break #break out of singleprocessing
 
@@ -1239,7 +1239,8 @@ class Solution:
                                         batch_results.append(res)
 
                                     for result in batch_results:
-                                        result.wait()
+                                        while not result.ready():
+                                            result.wait(timeout=0.01) #allow some time for processes to complete
 
                                     if len(results) > 0: #if improvement is found, stop processing batches
                                         solution_changed = True
@@ -1249,6 +1250,12 @@ class Solution:
                                         num_solutions_tried += num_this_loop
                                         if logging:
                                             print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
+                                    # Check if doubleswaps should be removed
+                                    if time.time() - current_iteration_time > doubleswap_time_threshold and "doubleswap" in active_moves:
+                                        active_moves.remove("doubleswap")
+                                        del move_generator["doubleswap"]
+                                        if logging:
+                                            print(f"Iteration {iteration}: Removed doubleswap moves due to time threshold exceeded ({time.time() - current_iteration_time:.2f} seconds).", flush=True)
                                     if time.time() - start_time > max_runtime:
                                         if logging:
                                             print(f"Max runtime of {max_runtime} seconds exceeded ({time.time() - start_time}), stopping local search.", flush=True)
@@ -1272,6 +1279,9 @@ class Solution:
                         if iteration % logging_frequency == 0 and logging:
                             print(f"Iteration {iteration}: Objective = {self.objective:.6f}", flush=True)
                             print(f"Average runtime last {logging_frequency} iterations: {np.mean(time_per_iteration[-logging_frequency:]):.6f} seconds", flush=True)
+        except KeyboardInterrupt:
+            print("\nKeyboardInterrupt during setup, exiting...", flush=True)
+            return time_per_iteration, objectives
         except Exception as e:
             print(f"An error occurred during local search: {e}", flush=True)
             print("Traceback details:", flush=True)
@@ -2221,7 +2231,7 @@ class SolutionAverage(Solution):
                         random_move_order: bool = True, random_index_order: bool = True, move_order: list = ["add", "swap", "doubleswap", "remove"],
                         batch_size: int = 1000, max_batches: int = 32, 
                         runtime_switch: float = 10.0,
-                        doubleswap_time_threshold: float = 1.0,
+                        doubleswap_time_threshold: float = 30.0,
                         logging: bool = False, logging_frequency: int = 500,
                         ):
         """
@@ -2450,7 +2460,7 @@ class SolutionAverage(Solution):
                                 # Check if current iteration should switch to multiprocessing
                                 if time.time() - current_iteration_time > runtime_switch:
                                     if logging:
-                                        print(f"Iteration {iteration+1} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
+                                        print(f"Iteration {iteration} is taking longer than {runtime_switch} seconds, switching to multiprocessing.", flush=True)
                                     run_in_multiprocessing = True
                                     break #break out of singleprocessing
 
@@ -2523,7 +2533,8 @@ class SolutionAverage(Solution):
                                         batch_results.append(res)
 
                                     for result in batch_results:
-                                        result.wait()
+                                        while not result.ready():
+                                            result.wait(timeout=0.01) #allow some time for processes to complete
 
                                     if len(results) > 0: #if improvement is found, stop processing batches
                                         solution_changed = True
@@ -2533,6 +2544,12 @@ class SolutionAverage(Solution):
                                         num_solutions_tried += num_this_loop
                                         if logging:
                                             print(f"Processed {num_solutions_tried} solutions (current batch took {time.time() - cur_batch_time:.2f}s), no improvement found yet.", flush=True)
+                                    # Check if doubleswaps should be removed
+                                    if time.time() - current_iteration_time > doubleswap_time_threshold and "doubleswap" in active_moves:
+                                        active_moves.remove("doubleswap")
+                                        del move_generator["doubleswap"]
+                                        if logging:
+                                            print(f"Iteration {iteration}: Removed doubleswap moves due to time threshold exceeded ({time.time() - current_iteration_time:.2f} seconds).", flush=True)
                                     if time.time() - start_time > max_runtime:
                                         if logging:
                                             print(f"Max runtime of {max_runtime} seconds exceeded ({time.time() - start_time}), stopping local search.", flush=True)
@@ -2556,6 +2573,9 @@ class SolutionAverage(Solution):
                         if iteration % logging_frequency == 0 and logging:
                             print(f"Iteration {iteration}: Objective = {self.objective:.6f}", flush=True)
                             print(f"Average runtime last {logging_frequency} iterations: {np.mean(time_per_iteration[-logging_frequency:]):.6f} seconds", flush=True)
+        except KeyboardInterrupt:
+            print("\nKeyboardInterrupt during setup, exiting...", flush=True)
+            return time_per_iteration, objectives
         except Exception as e:
             print(f"An error occurred during local search: {e}", flush=True)
             print("Traceback details:", flush=True)
