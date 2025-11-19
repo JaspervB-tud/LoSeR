@@ -1151,7 +1151,7 @@ class Solution:
                                     solution_changed = True
                                     break
 
-                            if move_counter % 1_000 == 0: #every 1000 moves, check if we should switch to multiprocessing or terminate
+                            if move_counter % 100 == 0: #every 100 moves, check if we should switch to multiprocessing or terminate
                                 # Check if total runtime exceeds max_runtime
                                 if time.time() - start_time > max_runtime:
                                     if logging:
@@ -2445,7 +2445,7 @@ class SolutionAverage(Solution):
                                     solution_changed = True
                                     break
 
-                            if move_counter % 1_000 == 0: #every 1000 moves, check if we should switch to multiprocessing or terminate
+                            if move_counter % 100 == 0: #every 100 moves, check if we should switch to multiprocessing or terminate
                                 # Check if total runtime exceeds max_runtime
                                 if time.time() - start_time > max_runtime:
                                     if logging:
