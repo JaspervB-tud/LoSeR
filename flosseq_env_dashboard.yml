@@ -1,4 +1,4 @@
-name: loser_env
+name: flosseq_env_dashboard
 channels:
   - conda-forge
   - bioconda
@@ -11,4 +11,3 @@ dependencies:
   - sourmash
   - biopython
   - streamlit
-prefix: /Users/jaspervanbemmelen/anaconda3/envs/loser_env

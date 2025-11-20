@@ -2,6 +2,10 @@
 All relevant changes are (or will be) documented here.
 This project attempts to follow Keep a Changelog and Semantic Versioning.
 
+## [0.1.3.1] - 20/11/2025
+### Changed
+- Changed name of package.
+
 ## [0.1.3] - 19/11/2025
 ### Added
 - Included basic dashboarding

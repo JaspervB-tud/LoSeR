@@ -10,4 +10,4 @@ from importlib.metadata import version as _pkg_version
 
 __all__ = ["Solution", "SolutionAverage"]
 
-__version__ = _pkg_version("loser")
+__version__ = _pkg_version("flosseq")

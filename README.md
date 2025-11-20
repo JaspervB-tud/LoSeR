@@ -1,7 +1,7 @@
-# **Lo**cal **Se**arch for **R**eference genome selection
+# Tool
 
 
-The objective of this document, is to detail how I proceeded to do things.
+Example steps for downloading data from NCBI
 
 * DOWNLOADING DATA
 Using NCBI datasets (https://www.ncbi.nlm.nih.gov/datasets/docs/v2/reference-docs/command-line/):
@@ -15,27 +15,6 @@ This downloads all "Complete Genome" quality genomes from GenBank (this excludes
 datasets summary genome taxon TAXID --assembly-level complete --assembly-source GenBank --exclude-atypical --as-json-lines | dataformat tsv genome --fields accession,organism-tax-id,source_database,assminfo-atypicalis-atypical > metadata.tsv
 ```
 This downloads the metadata (primarily the taxid) for the genomes downloaded through the previous command and stores it in a tsv file called `metadata.tsv`.
-
-* LOCAL SEARCH
-For the local search, the general strategy for now is to start from a centroid solution (i.e. select a centroid for every taxon), and to perform local search until an iteration limit or local optimal point has been reached. With this starting point (and in general) it is important to note that in order to remain feasible, we should also consider swaps (i.e. removing one point and adding another) which increases the neighborhoods.
-
-* TO-DO
-- Implement parallel local search
-    + generate neighborhood (i.e. local moves)
-    + batch local moves to pass on to processes
-    + evaluate local moves in parallel and stop when improvement is found
-        - possibly allow for process to finish processing batch (overhead is not too significant if batch is small)
-- Implement Simulated Annealing
-    + mostly similar to local search, but needs to deal with problems of parallelism
-- Low-priority
-    + visualization of the local search (how does the solution change over time)
-
-
-* IDEAS
-- For the local search we currently only move if we find a better solution. However, there might be merit in considering multiple points in the neighborhood, and moving towards one based on softmax probabilities. Doing so enables searching larger neighborhoods at the cost of potentially obtaining a worse solution. This can be solved by storing the best found solution so far
-- Currently implementation requires access to full distance matrix, which is of size O(N^2) with N=#genomes. Ideally, this can be circumvented, for example by only storing "local" distance matrices in memory (within cluster), and re-calculating distances between points of different clusters on a "per-need" basis. Alternatively, this might be able with memory mapping?
-- Assigning a constant cost of 1 for picking a genome might be arbitrary. It would be better to find a way of setting this cost to a value that makes sense (e.g. setting it to 0.5 because then it adds a genome if the distance between a pair of genomes is more than 0.5)
-
 
 ## FLP-based model
 ### Parameters

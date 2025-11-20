@@ -1,6 +1,6 @@
 # Solution Module
 
-This repository contains the `solution.py` script, which provides functionality for solving specific computational problems. The script is located in the `src/loser/` directory.
+This repository contains the `solution.py` script, which provides functionality for solving specific computational problems. The script is located in the `src/flosseq/` directory.
 
 ## Features
 
@@ -8,7 +8,7 @@ This repository contains the `solution.py` script, which provides functionality 
 
 ## Requirements
 
-- Python 3.13 or higher
+- Python 3.10 or higher
 - Dependencies listed in `requirements.txt`
 
 ## License

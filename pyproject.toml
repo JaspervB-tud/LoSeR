@@ -5,10 +5,10 @@ requires = ["hatchling>=1.18", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-name = "loser"
+name = "flosseq"
 ##version = "0.1.0" DEPRECATED -> use versioning from VCS
 dynamic = ["version"]
-description = "Local Search for Reference genome selection"
+description = "Facility Location for Selecting SEQuences"
 readme = "README_PYPI.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -30,9 +30,9 @@ classifiers = [
 # Uncomment this once GitHub is no longer private
 [project.urls]
 #Homepage = "https://example.com/loser"
-Repository = "https://github.com/JaspervB-tud/LoSeR"
+Repository = "https://github.com/JaspervB-tud/FLoSSeq"
 #Issues = "https://github.com/your-org/loser/issues"
-Changelog = "https://github.com/JaspervB-tud/LoSeR/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/JaspervB-tud/FLoSSeq/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
@@ -52,11 +52,11 @@ pythonpath = ["src"]
 addopts = "-p no:cacheprovider"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/loser"]
+packages = ["src/flosseq"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/loser",
+    "src/flosseq",
     "README_PYPI.md", 
     "LICENSE", 
     "tests", 

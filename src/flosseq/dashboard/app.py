@@ -1,5 +1,5 @@
 import streamlit as st
-from loser.dashboard import pipeline
+from flosseq.dashboard import pipeline
 import numpy as np
 import os
 import subprocess
@@ -7,7 +7,7 @@ import pandas as pd
 import time
 
 def run_app():
-    st.title("LoSeR Dashboard")
+    st.title("Dashboard")
 
     def choose_folder_macos():
         """
