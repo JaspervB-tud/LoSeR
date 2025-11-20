@@ -1,4 +1,4 @@
-from loser import solution as solution
+from flosseq import solution as solution
 from scipy.spatial.distance import squareform
 # Global imports
 import numpy as np
