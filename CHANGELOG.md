@@ -2,6 +2,9 @@
 All relevant changes are (or will be) documented here.
 This project attempts to follow Keep a Changelog and Semantic Versioning.
 
+## [0.1.4.4] - 27/11/2025
+Again testing if versioning is correct.
+
 ## [0.1.4] - 20/11/2025
 Testing if new PYPI package is correctly configured.
 
